@@ -1,5 +1,5 @@
 #define MyAppName "MyApp"
-#define MyAppVersion "1.1.0"
+#define MyAppVersion "1.0.0"
 #define MyAppPublisher "Your Company"
 #define MyAppURL "https://github.com/PixelHeaven/Software1"
 #define MyAppExeName "main.exe"
