@@ -6,10 +6,10 @@ import sys
 import os
 import json
 import threading
+from pathlib import Path
 import webbrowser
 from datetime import datetime
 import tempfile
-
 
 # Version and configuration
 CURRENT_VERSION = "1.0.2"
@@ -17,19 +17,28 @@ VERSION_URL = "https://raw.githubusercontent.com/PixelHeaven/software1/main/vers
 APP_NAME = "Advanced Text & PDF Editor"
 CONFIG_FILE = "config.json"
 
-# Optional dependencies
-try:
-    import fitz  # PyMuPDF
-    HAS_PDF_SUPPORT = True
-except ImportError:
-    HAS_PDF_SUPPORT = False
+# Optional dependencies - only import if available and needed
+HAS_PDF_SUPPORT = False
+HAS_PDF_EXPORT = False
 
-try:
-    from reportlab.pdfgen import canvas
-    from reportlab.lib.pagesizes import letter
-    HAS_PDF_EXPORT = True
-except ImportError:
-    HAS_PDF_EXPORT = False
+def check_pdf_support():
+    """Check for PDF support without importing heavy dependencies"""
+    global HAS_PDF_SUPPORT, HAS_PDF_EXPORT
+    try:
+        import fitz  # PyMuPDF
+        HAS_PDF_SUPPORT = True
+    except ImportError:
+        HAS_PDF_SUPPORT = False
+    
+    try:
+        import reportlab.pdfgen.canvas
+        import reportlab.lib.pagesizes
+        HAS_PDF_EXPORT = True
+    except ImportError:
+        HAS_PDF_EXPORT = False
+
+# Check PDF support on startup
+check_pdf_support()
 
 class ThemeManager:
     def __init__(self):
@@ -382,6 +391,7 @@ class PDFViewer:
         
         if file_path:
             try:
+                import fitz
                 self.current_pdf = fitz.open(file_path)
                 self.current_page = 0
                 self.display_page()
@@ -393,6 +403,7 @@ class PDFViewer:
             return
         
         try:
+            import fitz
             page = self.current_pdf[self.current_page]
             mat = fitz.Matrix(self.zoom_level, self.zoom_level)
             pix = page.get_pixmap(matrix=mat)
@@ -1054,7 +1065,7 @@ class ModernApp:
             bg=self.theme.get_colors()['bg'],
             fg=self.theme.get_colors()['fg'],
             activebackground=self.theme.get_colors()['bg'],
-                        command=self.on_auto_update_change
+            command=self.on_auto_update_change
         )
         auto_update_cb.pack(anchor='w', pady=5)
         
@@ -1397,7 +1408,7 @@ class ModernApp:
             except Exception as e:
                 messagebox.showerror("Error", f"Could not export to PDF:\n{str(e)}")
     
-        # Edit operations
+    # Edit operations
     def undo(self):
         """Undo last action"""
         if hasattr(self, 'advanced_editor'):
@@ -1744,7 +1755,7 @@ Paragraphs: {len([p for p in content.split('\n\n') if p.strip()]) if content els
         tk.Label(
             title_frame,
             text=f"Version {latest_version} is now available",
-            font=("Segoe UI", 12),
+                        font=("Segoe UI", 12),
             bg=self.theme.get_colors()['bg'],
             fg=self.theme.get_colors()['fg']
         ).pack(pady=(5, 0))
@@ -1757,7 +1768,7 @@ Paragraphs: {len([p for p in content.split('\n\n') if p.strip()]) if content els
             fg=self.theme.get_colors()['primary']
         ).pack()
         
-                # Release notes
+        # Release notes
         notes_frame = tk.LabelFrame(
             update_window,
             text="What's New",
