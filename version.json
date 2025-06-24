@@ -1,6 +1,6 @@
 {
   "version": "1.0.2",
-  "installer_url": "https://github.com/PixelHeaven/software1/releases/download/v1.0.1/MyApp_Setup.exe",
+  "installer_url": "https://github.com/PixelHeaven/software1/releases/download/v1.0.2/MyApp_Setup.exe",
   "release_notes": "🎉 Major Update!\n\n✨ New Features:\n• Beautiful tabbed interface\n• Built-in text editor with auto-save\n• Customizable settings\n• Enhanced update system\n• Professional design\n\n🐛 Bug Fixes:\n• Improved error handling\n• Better user feedback\n• Optimized performance\n\n🔧 Improvements:\n• Modern UI/UX\n• Keyboard shortcuts\n• Configuration management",
   "min_version": "1.0.0"
 }
