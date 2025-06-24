@@ -1,1554 +1,73 @@
-#!/usr/bin/env python3
-"""
-Advanced Text & PDF Editor - Advanced Text Editor & PDF Viewer
-Version 1.1.0
-
-A modern, feature-rich text editor and PDF viewer built with Python and Tkinter.
-Features: Advanced text editing, PDF viewing, auto-save, themes, and more.
-
-Author: PixelHeaven
-License: MIT
-"""
-
-import tkinter as tk
-from tkinter import messagebox, ttk, filedialog, scrolledtext
-import subprocess
 import sys
 import os
 import json
+import logging
 import threading
-from pathlib import Path
-import webbrowser
-from datetime import datetime
 import tempfile
-import time
-import re
-from collections import deque
+import subprocess
+import webbrowser
+from pathlib import Path
+from datetime import datetime
 
-# Application Configuration
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QTabWidget, QTextEdit, QLabel, QPushButton, QMenuBar, QMenu,
+    QAction, QFileDialog, QMessageBox, QFrame, QSplitter,
+    QStatusBar, QToolBar, QLineEdit, QComboBox, QCheckBox,
+    QSpinBox, QGroupBox, QGridLayout, QScrollArea, QListWidget,
+    QDialog, QFormLayout, QProgressBar, QTextBrowser
+)
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject
+from PyQt5.QtGui import QFont, QIcon, QPixmap, QTextCursor
+
+# Version and configuration
 CURRENT_VERSION = "1.1.0"
 VERSION_URL = "https://raw.githubusercontent.com/PixelHeaven/software1/main/version.json"
-APP_NAME = "Advanced Text & PDF Editor"
+APP_NAME = "Advanced Text Editor"
 CONFIG_FILE = "config.json"
-BACKUP_DIR = "backups"
 
-# Safe import functions for optional dependencies
-def safe_import(module_name, package_name=None):
-    """Safely import a module with fallback handling"""
+# Safe import function for optional dependencies
+def safe_import_requests():
+    """Safely import requests library"""
     try:
-        if package_name:
-            exec(f"import {module_name}")
-            return sys.modules[module_name]
-        else:
-            __import__(module_name)
-            return sys.modules[module_name]
+        import requests
+        return requests
     except ImportError:
         return None
 
-# Optional dependencies with safe imports
-requests = safe_import('requests')
-HAS_REQUESTS = requests is not None
-
-# PDF support
-try:
-    import fitz  # PyMuPDF
-    HAS_PDF_SUPPORT = True
-except ImportError:
-    fitz = None
-    HAS_PDF_SUPPORT = False
-
-# PDF export support
-try:
-    from reportlab.pdfgen import canvas
-    from reportlab.lib.pagesizes import letter
-    from reportlab.lib.units import inch
-    HAS_PDF_EXPORT = True
-except ImportError:
-    canvas = None
-    letter = None
-    inch = None
-    HAS_PDF_EXPORT = False
-
-class Logger:
-    """Simple logging system for debugging"""
-    def __init__(self):
-        self.logs = deque(maxlen=1000)
+class UpdateChecker(QObject):
+    """Update checker that runs in a separate thread"""
+    update_available = pyqtSignal(dict)  # Emits update info
+    update_error = pyqtSignal(str)       # Emits error message
+    no_update = pyqtSignal(str)          # Emits when no update available
     
-    def log(self, level, message):
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        log_entry = f"[{timestamp}] {level}: {message}"
-        self.logs.append(log_entry)
-        print(log_entry)
+    def __init__(self, silent=False):
+        super().__init__()
+        self.silent = silent
     
-    def info(self, message):
-        self.log("INFO", message)
-    
-    def error(self, message):
-        self.log("ERROR", message)
-    
-    def warning(self, message):
-        self.log("WARNING", message)
-
-logger = Logger()
-
-class ThemeManager:
-    """Advanced theme management system"""
-    
-    def __init__(self):
-        self.themes = {
-            'dark': {
-                'name': 'Dark Professional',
-                'bg': '#2b2b2b',
-                'fg': '#ffffff',
-                'select_bg': '#404040',
-                'select_fg': '#ffffff',
-                'primary': '#0078d4',
-                'secondary': '#ffc107',
-                'success': '#28a745',
-                'danger': '#dc3545',
-                'warning': '#fd7e14',
-                'info': '#17a2b8',
-                'editor_bg': '#1e1e1e',
-                'editor_fg': '#d4d4d4',
-                'sidebar_bg': '#252526',
-                'tab_bg': '#2d2d30',
-                'accent': '#007acc',
-                'border': '#3e3e42'
-            },
-            'light': {
-                'name': 'Light Professional',
-                'bg': '#f8f9fa',
-                'fg': '#212529',
-                'select_bg': '#e3f2fd',
-                'select_fg': '#1565c0',
-                'primary': '#2196f3',
-                'secondary': '#ff9800',
-                'success': '#4caf50',
-                'danger': '#f44336',
-                'warning': '#ff5722',
-                'info': '#00bcd4',
-                'editor_bg': '#ffffff',
-                'editor_fg': '#000000',
-                'sidebar_bg': '#f5f5f5',
-                'tab_bg': '#e0e0e0',
-                'accent': '#1976d2',
-                'border': '#dee2e6'
-            },
-            'high_contrast': {
-                'name': 'High Contrast',
-                'bg': '#000000',
-                'fg': '#ffffff',
-                'select_bg': '#ffffff',
-                'select_fg': '#000000',
-                'primary': '#ffff00',
-                'secondary': '#00ffff',
-                'success': '#00ff00',
-                'danger': '#ff0000',
-                'warning': '#ff8800',
-                'info': '#0088ff',
-                'editor_bg': '#000000',
-                'editor_fg': '#ffffff',
-                'sidebar_bg': '#333333',
-                'tab_bg': '#444444',
-                'accent': '#ffffff',
-                'border': '#ffffff'
-            }
-        }
-        self.current_theme = 'dark'
-        logger.info("ThemeManager initialized")
-    
-    def get_colors(self):
-        """Get current theme colors"""
-        return self.themes[self.current_theme]
-    
-    def get_theme_names(self):
-        """Get list of available theme names"""
-        return [theme['name'] for theme in self.themes.values()]
-    
-    def switch_theme(self, theme_name):
-        """Switch to a different theme"""
-        if theme_name in self.themes:
-            self.current_theme = theme_name
-            logger.info(f"Theme switched to: {theme_name}")
-        else:
-            logger.warning(f"Theme not found: {theme_name}")
-
-class SyntaxHighlighter:
-    """Advanced syntax highlighting system"""
-    
-    def __init__(self, text_widget, theme_manager):
-        self.text_widget = text_widget
-        self.theme = theme_manager
-        self.current_language = 'text'
-        self.setup_tags()
-        
-    def setup_tags(self):
-        """Setup syntax highlighting tags"""
-        colors = self.theme.get_colors()
-        
-        # Configure tags for different syntax elements
-        self.text_widget.tag_configure('keyword', foreground='#569cd6', font=('Consolas', 11, 'bold'))
-        self.text_widget.tag_configure('string', foreground='#ce9178')
-        self.text_widget.tag_configure('comment', foreground='#6a9955', font=('Consolas', 11, 'italic'))
-        self.text_widget.tag_configure('number', foreground='#b5cea8')
-        self.text_widget.tag_configure('function', foreground='#dcdcaa')
-        self.text_widget.tag_configure('class', foreground='#4ec9b0')
-        self.text_widget.tag_configure('operator', foreground='#d4d4d4')
-        self.text_widget.tag_configure('builtin', foreground='#569cd6')
-        
-    def set_language(self, language):
-        """Set the programming language for highlighting"""
-        self.current_language = language.lower()
-        self.highlight_all()
-        
-    def highlight_all(self):
-        """Apply syntax highlighting to entire document"""
-        if self.current_language == 'text':
-            return
-            
-        content = self.text_widget.get('1.0', 'end')
-        
-        # Clear existing tags
-        for tag in ['keyword', 'string', 'comment', 'number', 'function', 'class', 'operator', 'builtin']:
-            self.text_widget.tag_remove(tag, '1.0', 'end')
-        
-        if self.current_language == 'python':
-            self._highlight_python(content)
-        elif self.current_language == 'javascript':
-            self._highlight_javascript(content)
-        elif self.current_language == 'html':
-            self._highlight_html(content)
-        elif self.current_language == 'css':
-            self._highlight_css(content)
-            
-    def _highlight_python(self, content):
-        """Highlight Python syntax"""
-        keywords = ['def', 'class', 'if', 'else', 'elif', 'for', 'while', 'try', 'except', 
-                   'finally', 'import', 'from', 'return', 'break', 'continue', 'pass',
-                   'and', 'or', 'not', 'in', 'is', 'lambda', 'with', 'as', 'yield',
-                   'global', 'nonlocal', 'assert', 'del', 'raise']
-        
-        builtins = ['print', 'len', 'str', 'int', 'float', 'list', 'dict', 'tuple',
-                   'set', 'bool', 'type', 'isinstance', 'hasattr', 'getattr', 'setattr']
-        
-        self._highlight_patterns(content, [
-            (r'\b(' + '|'.join(keywords) + r')\b', 'keyword'),
-            (r'\b(' + '|'.join(builtins) + r')\b', 'builtin'),
-            (r'#.*?$', 'comment'),
-            (r'""".*?"""', 'string'),
-            (r"'''.*?'''", 'string'),
-            (r'".*?"', 'string'),
-            (r"'.*?'", 'string'),
-            (r'\b\d+\.?\d*\b', 'number'),
-            (r'\bdef\s+(\w+)', 'function'),
-            (r'\bclass\s+(\w+)', 'class'),
-        ])
-    
-    def _highlight_javascript(self, content):
-        """Highlight JavaScript syntax"""
-        keywords = ['function', 'var', 'let', 'const', 'if', 'else', 'for', 'while',
-                   'do', 'switch', 'case', 'default', 'break', 'continue', 'return',
-                   'try', 'catch', 'finally', 'throw', 'new', 'this', 'typeof',
-                   'instanceof', 'in', 'of', 'class', 'extends', 'super']
-        
-        self._highlight_patterns(content, [
-            (r'\b(' + '|'.join(keywords) + r')\b', 'keyword'),
-            (r'//.*?$', 'comment'),
-            (r'/\*.*?\*/', 'comment'),
-            (r'".*?"', 'string'),
-            (r"'.*?'", 'string'),
-            (r'`.*?`', 'string'),
-            (r'\b\d+\.?\d*\b', 'number'),
-            (r'\bfunction\s+(\w+)', 'function'),
-        ])
-    
-    def _highlight_patterns(self, content, patterns):
-        """Apply regex patterns for syntax highlighting"""
-        lines = content.split('\n')
-        
-        for line_num, line in enumerate(lines, 1):
-            for pattern, tag in patterns:
-                matches = re.finditer(pattern, line, re.MULTILINE)
-                for match in matches:
-                    start = f"{line_num}.{match.start()}"
-                    end = f"{line_num}.{match.end()}"
-                    
-                    if tag in ['function', 'class'] and match.groups():
-                        # Highlight the function/class name specifically
-                        start = f"{line_num}.{match.start(1)}"
-                        end = f"{line_num}.{match.end(1)}"
-                    
-                    self.text_widget.tag_add(tag, start, end)
-
-class AdvancedTextEditor:
-    """Advanced text editor with modern features"""
-    
-    def __init__(self, parent, theme_manager):
-        self.parent = parent
-        self.theme = theme_manager
-        self.search_window = None
-        self.find_index = "1.0"
-        self.zoom_level = 100
-        
-        # Create main editor frame
-        self.editor_frame = tk.Frame(parent, bg=self.theme.get_colors()['bg'])
-        
-        # Create the editor interface
-        self.create_editor()
-        self.create_toolbar()
-        
-        # Initialize syntax highlighter
-        self.highlighter = SyntaxHighlighter(self.text_editor, self.theme)
-        
-        logger.info("AdvancedTextEditor initialized")
-    
-    def create_toolbar(self):
-        """Create editor toolbar"""
-        toolbar = tk.Frame(self.editor_frame, bg=self.theme.get_colors()['tab_bg'], height=45)
-        toolbar.pack(fill='x', side='top')
-        toolbar.pack_propagate(False)
-        
-        # Language selector
-        tk.Label(
-            toolbar,
-            text="Language:",
-            bg=self.theme.get_colors()['tab_bg'],
-            fg=self.theme.get_colors()['fg'],
-            font=('Segoe UI', 9)
-        ).pack(side='left', padx=(10, 5), pady=12)
-        
-        self.language_var = tk.StringVar(value='text')
-        language_combo = ttk.Combobox(
-            toolbar,
-            textvariable=self.language_var,
-            values=['text', 'python', 'javascript', 'html', 'css', 'json', 'xml'],
-            width=12,
-            state='readonly'
-        )
-        language_combo.pack(side='left', padx=(0, 10), pady=12)
-        language_combo.bind('<<ComboboxSelected>>', self.on_language_change)
-        
-        # Zoom controls
-        tk.Label(
-            toolbar,
-            text="Zoom:",
-            bg=self.theme.get_colors()['tab_bg'],
-            fg=self.theme.get_colors()['fg'],
-            font=('Segoe UI', 9)
-        ).pack(side='left', padx=(10, 5), pady=12)
-        
-        zoom_frame = tk.Frame(toolbar, bg=self.theme.get_colors()['tab_bg'])
-        zoom_frame.pack(side='left', pady=12)
-        
-        tk.Button(
-            zoom_frame,
-            text="-",
-            command=self.zoom_out,
-            bg=self.theme.get_colors()['select_bg'],
-            fg=self.theme.get_colors()['fg'],
-            font=('Segoe UI', 9, 'bold'),
-            width=2,
-            relief='flat'
-        ).pack(side='left')
-        
-        self.zoom_label = tk.Label(
-            zoom_frame,
-            text="100%",
-            bg=self.theme.get_colors()['tab_bg'],
-            fg=self.theme.get_colors()['fg'],
-            font=('Segoe UI', 9),
-            width=6
-        )
-        self.zoom_label.pack(side='left', padx=5)
-        
-        tk.Button(
-            zoom_frame,
-            text="+",
-            command=self.zoom_in,
-            bg=self.theme.get_colors()['select_bg'],
-            fg=self.theme.get_colors()['fg'],
-            font=('Segoe UI', 9, 'bold'),
-            width=2,
-            relief='flat'
-        ).pack(side='left')
-        
-        # Word wrap toggle
-        self.wrap_var = tk.BooleanVar(value=False)
-        wrap_cb = tk.Checkbutton(
-            toolbar,
-            text="Word Wrap",
-            variable=self.wrap_var,
-            command=self.toggle_word_wrap,
-            bg=self.theme.get_colors()['tab_bg'],
-            fg=self.theme.get_colors()['fg'],
-            font=('Segoe UI', 9),
-            activebackground=self.theme.get_colors()['tab_bg']
-        )
-        wrap_cb.pack(side='right', padx=10, pady=12)
-    
-    def create_editor(self):
-        """Create the main text editor interface"""
-        # Main editor container
-        editor_container = tk.Frame(self.editor_frame, bg=self.theme.get_colors()['bg'])
-        editor_container.pack(fill='both', expand=True, padx=5, pady=5)
-        
-        # Line numbers frame
-        line_frame = tk.Frame(editor_container, bg=self.theme.get_colors()['sidebar_bg'], width=60)
-        line_frame.pack(side='left', fill='y')
-        line_frame.pack_propagate(False)
-        
-        # Line numbers text widget
-        self.line_numbers = tk.Text(
-            line_frame,
-            width=5,
-            padx=8,
-            pady=5,
-            takefocus=0,
-            border=0,
-            state='disabled',
-            wrap='none',
-            font=('Consolas', 11),
-            bg=self.theme.get_colors()['sidebar_bg'],
-            fg=self.theme.get_colors()['fg'],
-            cursor='arrow'
-        )
-        self.line_numbers.pack(fill='both', expand=True)
-        
-        # Main text editor
-        self.text_editor = tk.Text(
-            editor_container,
-            wrap='none',
-            font=('Consolas', 11),
-            bg=self.theme.get_colors()['editor_bg'],
-            fg=self.theme.get_colors()['editor_fg'],
-            insertbackground=self.theme.get_colors()['primary'],
-            selectbackground=self.theme.get_colors()['primary'],
-            selectforeground='white',
-            undo=True,
-            maxundo=100,
-            padx=10,
-            pady=5,
-            spacing1=2,
-            spacing3=2
-        )
-        
-        # Scrollbars
-        v_scrollbar = tk.Scrollbar(editor_container, orient='vertical', command=self.sync_scroll)
-        h_scrollbar = tk.Scrollbar(editor_container, orient='horizontal', command=self.text_editor.xview)
-        
-        # Configure scrollbars
-        self.text_editor.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
-        
-        # Pack elements
-        v_scrollbar.pack(side='right', fill='y')
-        h_scrollbar.pack(side='bottom', fill='x')
-        self.text_editor.pack(fill='both', expand=True)
-        
-        # Bind events
-        self.text_editor.bind('<KeyRelease>', self.on_text_change)
-        self.text_editor.bind('<Button-1>', self.on_text_change)
-        self.text_editor.bind('<MouseWheel>', self.on_mousewheel)
-        self.text_editor.bind('<Control-f>', lambda e: self.show_find_replace())
-        self.text_editor.bind('<Control-h>', lambda e: self.show_find_replace())
-        self.text_editor.bind('<F3>', lambda e: self.find_next())
-        
-        # Context menu
-        self.create_context_menu()
-        
-        # Initial line numbers update
-        self.update_line_numbers()
-    
-    def create_context_menu(self):
-        """Create right-click context menu"""
-        self.context_menu = tk.Menu(self.text_editor, tearoff=0)
-        self.context_menu.add_command(label="Undo", command=self.undo)
-        self.context_menu.add_command(label="Redo", command=self.redo)
-        self.context_menu.add_separator()
-        self.context_menu.add_command(label="Cut", command=self.cut)
-        self.context_menu.add_command(label="Copy", command=self.copy)
-        self.context_menu.add_command(label="Paste", command=self.paste)
-        self.context_menu.add_separator()
-        self.context_menu.add_command(label="Select All", command=self.select_all)
-        self.context_menu.add_command(label="Find & Replace", command=self.show_find_replace)
-        
-        self.text_editor.bind("<Button-3>", self.show_context_menu)
-    
-    def show_context_menu(self, event):
-        """Show context menu"""
+    def check_for_updates(self):
+        """Check for updates in background thread"""
         try:
-            self.context_menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            self.context_menu.grab_release()
-    
-    def sync_scroll(self, *args):
-        """Synchronize scrolling between text editor and line numbers"""
-        self.text_editor.yview(*args)
-        self.line_numbers.yview(*args)
-    
-    def on_mousewheel(self, event):
-        """Handle mouse wheel scrolling"""
-        if event.state & 0x4:  # Ctrl key pressed
-            if event.delta > 0:
-                self.zoom_in()
+            requests = safe_import_requests()
+            if not requests:
+                raise Exception("Requests library not available")
+            
+            response = requests.get(VERSION_URL, timeout=10)
+            response.raise_for_status()
+            
+            version_info = response.json()
+            latest_version = version_info.get("version", "")
+            
+            if self._is_newer_version(latest_version, CURRENT_VERSION):
+                self.update_available.emit(version_info)
             else:
-                self.zoom_out()
-        else:
-            # Normal scrolling
-            self.line_numbers.yview_scroll(int(-1*(event.delta/120)), "units")
-    
-    def on_text_change(self, event=None):
-        """Handle text changes"""
-        self.update_line_numbers()
-        
-        # Apply syntax highlighting with delay to avoid performance issues
-        if hasattr(self, 'highlight_timer'):
-            self.text_editor.after_cancel(self.highlight_timer)
-        self.highlight_timer = self.text_editor.after(500, self.highlighter.highlight_all)
-        
-        # Notify parent of changes
-        if hasattr(self.parent, 'master') and hasattr(self.parent.master, 'on_text_change'):
-            self.parent.master.on_text_change()
-    
-    def update_line_numbers(self):
-        """Update line numbers display"""
-        try:
-            line_count = int(self.text_editor.index('end-1c').split('.')[0])
-            line_numbers_content = '\n'.join(str(i) for i in range(1, line_count + 1))
-            
-            self.line_numbers.config(state='normal')
-            self.line_numbers.delete('1.0', 'end')
-            self.line_numbers.insert('1.0', line_numbers_content)
-            self.line_numbers.config(state='disabled')
-        except Exception as e:
-            logger.error(f"Error updating line numbers: {e}")
-    
-    def on_language_change(self, event=None):
-        """Handle language selection change"""
-        language = self.language_var.get()
-        self.highlighter.set_language(language)
-        logger.info(f"Language changed to: {language}")
-    
-    def zoom_in(self):
-        """Increase font size"""
-        if self.zoom_level < 200:
-            self.zoom_level += 10
-            self.apply_zoom()
-    
-    def zoom_out(self):
-        """Decrease font size"""
-        if self.zoom_level > 50:
-            self.zoom_level -= 10
-            self.apply_zoom()
-    
-    def apply_zoom(self):
-        """Apply current zoom level"""
-        base_size = 11
-        new_size = int(base_size * (self.zoom_level / 100))
-        
-        font_family = self.text_editor.cget('font').split()[0] if isinstance(self.text_editor.cget('font'), str) else 'Consolas'
-        new_font = (font_family, new_size)
-        
-        self.text_editor.configure(font=new_font)
-        self.line_numbers.configure(font=new_font)
-        self.zoom_label.config(text=f"{self.zoom_level}%")
-        
-        # Update syntax highlighting tags
-        self.highlighter.setup_tags()
-    
-    def toggle_word_wrap(self):
-        """Toggle word wrap mode"""
-        if self.wrap_var.get():
-            self.text_editor.configure(wrap='word')
-        else:
-            self.text_editor.configure(wrap='none')
-    
-    def show_find_replace(self):
-        """Show find and replace dialog"""
-        if self.search_window and self.search_window.winfo_exists():
-            self.search_window.lift()
-            self.search_window.focus()
-            return
-        
-        self.search_window = tk.Toplevel(self.parent)
-        self.search_window.title("Find & Replace")
-        self.search_window.geometry("450x250")
-        self.search_window.resizable(False, False)
-        self.search_window.configure(bg=self.theme.get_colors()['bg'])
-        self.search_window.transient(self.parent)
-        
-        # Center the window
-        self.search_window.update_idletasks()
-        x = (self.search_window.winfo_screenwidth() // 2) - (450 // 2)
-        y = (self.search_window.winfo_screenheight() // 2) - (250 // 2)
-        self.search_window.geometry(f"450x250+{x}+{y}")
-        
-        # Find section
-        find_frame = tk.LabelFrame(
-            self.search_window,
-            text="Find",
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg'],
-            font=('Segoe UI', 10, 'bold')
-        )
-        find_frame.pack(fill='x', padx=15, pady=10)
-        
-        self.find_entry = tk.Entry(
-            find_frame,
-            width=40,
-            font=('Segoe UI', 11),
-            bg=self.theme.get_colors()['editor_bg'],
-            fg=self.theme.get_colors()['editor_fg']
-        )
-        self.find_entry.pack(padx=10, pady=10)
-        self.find_entry.bind('<Return>', lambda e: self.find_next())
-        
-        # Replace section
-        replace_frame = tk.LabelFrame(
-            self.search_window,
-            text="Replace",
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg'],
-            font=('Segoe UI', 10, 'bold')
-        )
-        replace_frame.pack(fill='x', padx=15, pady=(0, 10))
-        
-        self.replace_entry = tk.Entry(
-            replace_frame,
-            width=40,
-            font=('Segoe UI', 11),
-            bg=self.theme.get_colors()['editor_bg'],
-            fg=self.theme.get_colors()['editor_fg']
-        )
-        self.replace_entry.pack(padx=10, pady=10)
-        self.replace_entry.bind('<Return>', lambda e: self.replace_current())
-        
-        # Options
-        options_frame = tk.Frame(self.search_window, bg=self.theme.get_colors()['bg'])
-        options_frame.pack(fill='x', padx=15, pady=(0, 10))
-        
-        self.case_sensitive_var = tk.BooleanVar()
-        case_cb = tk.Checkbutton(
-            options_frame,
-            text="Case sensitive",
-            variable=self.case_sensitive_var,
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg'],
-            font=('Segoe UI', 9)
-        )
-        case_cb.pack(side='left')
-        
-        # Buttons
-        button_frame = tk.Frame(self.search_window, bg=self.theme.get_colors()['bg'])
-        button_frame.pack(fill='x', padx=15, pady=(0, 15))
-        
-        buttons = [
-            ("Find Next", self.find_next, self.theme.get_colors()['primary']),
-            ("Find All", self.find_all, self.theme.get_colors()['info']),
-            ("Replace", self.replace_current, self.theme.get_colors()['warning']),
-            ("Replace All", self.replace_all, self.theme.get_colors()['success'])
-        ]
-        
-        for text, command, color in buttons:
-            btn = tk.Button(
-                button_frame,
-                text=text,
-                command=command,
-                bg=color,
-                fg='white',
-                font=('Segoe UI', 9, 'bold'),
-                padx=15,
-                pady=5,
-                relief='flat'
-            )
-            btn.pack(side='left', padx=2)
-        
-        # Close button
-        tk.Button(
-            button_frame,
-            text="Close",
-            command=self.close_search,
-            bg=self.theme.get_colors()['select_bg'],
-            fg=self.theme.get_colors()['fg'],
-            font=('Segoe UI', 9),
-            padx=15,
-            pady=5,
-            relief='flat'
-        ).pack(side='right')
-        
-        self.search_window.protocol("WM_DELETE_WINDOW", self.close_search)
-        self.find_entry.focus()
-    
-    def find_next(self):
-        """Find next occurrence"""
-        search_term = self.find_entry.get() if hasattr(self, 'find_entry') else ""
-        if not search_term:
-            return
-        
-        # Get search options
-        case_sensitive = getattr(self, 'case_sensitive_var', tk.BooleanVar()).get()
-        
-        # Start search from current cursor position
-        start_pos = self.text_editor.index(tk.INSERT)
-        
-        # Perform search
-        if case_sensitive:
-            pos = self.text_editor.search(search_term, start_pos, 'end')
-        else:
-            pos = self.text_editor.search(search_term, start_pos, 'end', nocase=True)
-        
-                # If not found from cursor, search from beginning
-        if not pos:
-            if case_sensitive:
-                pos = self.text_editor.search(search_term, '1.0', start_pos)
-            else:
-                pos = self.text_editor.search(search_term, '1.0', start_pos, nocase=True)
-        
-        if pos:
-            # Select found text
-            end_pos = f"{pos}+{len(search_term)}c"
-            self.text_editor.tag_remove(tk.SEL, '1.0', 'end')
-            self.text_editor.tag_add(tk.SEL, pos, end_pos)
-            self.text_editor.mark_set(tk.INSERT, end_pos)
-            self.text_editor.see(pos)
-            self.find_index = end_pos
-        else:
-            messagebox.showinfo("Find", f"'{search_term}' not found.")
-    
-    def find_all(self):
-        """Find and highlight all occurrences"""
-        search_term = self.find_entry.get() if hasattr(self, 'find_entry') else ""
-        if not search_term:
-            return
-        
-        # Clear previous highlights
-        self.text_editor.tag_remove('find_highlight', '1.0', 'end')
-        
-        # Configure highlight tag
-        self.text_editor.tag_configure('find_highlight', 
-                                     background=self.theme.get_colors()['warning'],
-                                     foreground='black')
-        
-        case_sensitive = getattr(self, 'case_sensitive_var', tk.BooleanVar()).get()
-        count = 0
-        start = '1.0'
-        
-        while True:
-            if case_sensitive:
-                pos = self.text_editor.search(search_term, start, 'end')
-            else:
-                pos = self.text_editor.search(search_term, start, 'end', nocase=True)
-            
-            if not pos:
-                break
-                
-            end_pos = f"{pos}+{len(search_term)}c"
-            self.text_editor.tag_add('find_highlight', pos, end_pos)
-            count += 1
-            start = end_pos
-        
-        if count > 0:
-            messagebox.showinfo("Find All", f"Found {count} occurrence(s) of '{search_term}'.")
-        else:
-            messagebox.showinfo("Find All", f"'{search_term}' not found.")
-    
-    def replace_current(self):
-        """Replace currently selected text"""
-        try:
-            if self.text_editor.tag_ranges(tk.SEL):
-                replace_text = self.replace_entry.get() if hasattr(self, 'replace_entry') else ""
-                self.text_editor.delete(tk.SEL_FIRST, tk.SEL_LAST)
-                self.text_editor.insert(tk.INSERT, replace_text)
-        except tk.TclError:
-            messagebox.showwarning("Replace", "No text selected to replace.")
-    
-    def replace_all(self):
-        """Replace all occurrences"""
-        search_term = self.find_entry.get() if hasattr(self, 'find_entry') else ""
-        replace_term = self.replace_entry.get() if hasattr(self, 'replace_entry') else ""
-        
-        if not search_term:
-            return
-        
-        content = self.text_editor.get('1.0', 'end-1c')
-        case_sensitive = getattr(self, 'case_sensitive_var', tk.BooleanVar()).get()
-        
-        if case_sensitive:
-            new_content = content.replace(search_term, replace_term)
-            count = content.count(search_term)
-        else:
-            # Case insensitive replacement
-            import re
-            pattern = re.compile(re.escape(search_term), re.IGNORECASE)
-            new_content = pattern.sub(replace_term, content)
-            count = len(pattern.findall(content))
-        
-        if count > 0:
-            self.text_editor.delete('1.0', 'end')
-            self.text_editor.insert('1.0', new_content)
-            messagebox.showinfo("Replace All", f"Replaced {count} occurrence(s).")
-        else:
-            messagebox.showinfo("Replace All", f"'{search_term}' not found.")
-    
-    def close_search(self):
-        """Close search dialog"""
-        # Clear highlights
-        self.text_editor.tag_remove('find_highlight', '1.0', 'end')
-        if self.search_window and self.search_window.winfo_exists():
-            self.search_window.destroy()
-        self.search_window = None
-    
-    # Text operations
-    def undo(self):
-        """Undo last action"""
-        try:
-            self.text_editor.edit_undo()
-        except tk.TclError:
-            pass
-    
-    def redo(self):
-        """Redo last undone action"""
-        try:
-            self.text_editor.edit_redo()
-        except tk.TclError:
-            pass
-    
-    def cut(self):
-        """Cut selected text"""
-        self.text_editor.event_generate("<<Cut>>")
-    
-    def copy(self):
-        """Copy selected text"""
-        self.text_editor.event_generate("<<Copy>>")
-    
-    def paste(self):
-        """Paste text from clipboard"""
-        self.text_editor.event_generate("<<Paste>>")
-    
-    def select_all(self):
-        """Select all text"""
-        self.text_editor.tag_add(tk.SEL, "1.0", tk.END)
-        self.text_editor.mark_set(tk.INSERT, "1.0")
-        self.text_editor.see(tk.INSERT)
-    
-    def insert_text(self, text):
-        """Insert text at current cursor position"""
-        self.text_editor.insert(tk.INSERT, text)
-    
-    def get_text(self):
-        """Get all text from editor"""
-        return self.text_editor.get('1.0', 'end-1c')
-    
-    def set_text(self, text):
-        """Set text in editor"""
-        self.text_editor.delete('1.0', 'end')
-        self.text_editor.insert('1.0', text)
-    
-    def clear_text(self):
-        """Clear all text"""
-        self.text_editor.delete('1.0', 'end')
-    
-    def get_frame(self):
-        """Get the main editor frame"""
-        return self.editor_frame
-
-class PDFViewer:
-    """Advanced PDF viewer with zoom and navigation"""
-    
-    def __init__(self, parent, theme_manager):
-        self.parent = parent
-        self.theme = theme_manager
-        self.current_pdf = None
-        self.current_page = 0
-        self.zoom_level = 1.0
-        self.rotation = 0
-        
-        if HAS_PDF_SUPPORT:
-            self.create_pdf_viewer()
-        else:
-            self.create_placeholder()
-        
-        logger.info("PDFViewer initialized")
-    
-    def create_pdf_viewer(self):
-        """Create PDF viewer interface"""
-        self.pdf_frame = tk.Frame(self.parent, bg=self.theme.get_colors()['bg'])
-        
-        # Toolbar
-        self.create_toolbar()
-        
-        # PDF display area with scrollbars
-        display_frame = tk.Frame(self.pdf_frame, bg=self.theme.get_colors()['bg'])
-        display_frame.pack(fill='both', expand=True, padx=10, pady=10)
-        
-        # Canvas for PDF display
-        self.pdf_canvas = tk.Canvas(
-            display_frame,
-            bg='white',
-            highlightthickness=1,
-            highlightbackground=self.theme.get_colors()['border']
-        )
-        
-        # Scrollbars
-        v_scrollbar = tk.Scrollbar(display_frame, orient='vertical', command=self.pdf_canvas.yview)
-        h_scrollbar = tk.Scrollbar(display_frame, orient='horizontal', command=self.pdf_canvas.xview)
-        
-        self.pdf_canvas.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
-        
-        # Pack scrollbars and canvas
-        v_scrollbar.pack(side='right', fill='y')
-        h_scrollbar.pack(side='bottom', fill='x')
-        self.pdf_canvas.pack(fill='both', expand=True)
-        
-        # Bind mouse events
-        self.pdf_canvas.bind('<MouseWheel>', self.on_mouse_wheel)
-        self.pdf_canvas.bind('<Button-1>', lambda e: self.pdf_canvas.focus_set())
-    
-    def create_toolbar(self):
-        """Create PDF viewer toolbar"""
-        toolbar = tk.Frame(self.pdf_frame, bg=self.theme.get_colors()['sidebar_bg'], height=60)
-        toolbar.pack(fill='x')
-        toolbar.pack_propagate(False)
-        
-        # File operations
-        file_frame = tk.Frame(toolbar, bg=self.theme.get_colors()['sidebar_bg'])
-        file_frame.pack(side='left', padx=10, pady=10)
-        
-        tk.Button(
-            file_frame,
-            text="📂 Open PDF",
-            command=self.open_pdf,
-            bg=self.theme.get_colors()['primary'],
-            fg='white',
-            font=('Segoe UI', 10, 'bold'),
-            padx=15,
-            pady=8,
-            relief='flat'
-        ).pack(side='left', padx=2)
-        
-        # Navigation
-        nav_frame = tk.Frame(toolbar, bg=self.theme.get_colors()['sidebar_bg'])
-        nav_frame.pack(side='left', padx=20, pady=10)
-        
-        tk.Button(
-            nav_frame,
-            text="⬅ Previous",
-            command=self.prev_page,
-            bg=self.theme.get_colors()['select_bg'],
-            fg=self.theme.get_colors()['fg'],
-            font=('Segoe UI', 9),
-            padx=10,
-            pady=5,
-            relief='flat'
-        ).pack(side='left', padx=2)
-        
-        tk.Button(
-            nav_frame,
-            text="Next ➡",
-            command=self.next_page,
-            bg=self.theme.get_colors()['select_bg'],
-            fg=self.theme.get_colors()['fg'],
-            font=('Segoe UI', 9),
-            padx=10,
-            pady=5,
-            relief='flat'
-        ).pack(side='left', padx=2)
-        
-        # Page info
-        self.page_label = tk.Label(
-            nav_frame,
-            text="No PDF loaded",
-            bg=self.theme.get_colors()['sidebar_bg'],
-            fg=self.theme.get_colors()['fg'],
-            font=('Segoe UI', 10, 'bold')
-        )
-        self.page_label.pack(side='left', padx=15)
-        
-        # Zoom controls
-        zoom_frame = tk.Frame(toolbar, bg=self.theme.get_colors()['sidebar_bg'])
-        zoom_frame.pack(side='right', padx=10, pady=10)
-        
-        tk.Button(
-            zoom_frame,
-            text="🔍-",
-            command=self.zoom_out,
-            bg=self.theme.get_colors()['select_bg'],
-            fg=self.theme.get_colors()['fg'],
-            font=('Segoe UI', 9),
-            width=4,
-            pady=5,
-            relief='flat'
-        ).pack(side='left', padx=2)
-        
-        self.zoom_display = tk.Label(
-            zoom_frame,
-            text="100%",
-            bg=self.theme.get_colors()['sidebar_bg'],
-            fg=self.theme.get_colors()['fg'],
-            font=('Segoe UI', 9),
-            width=6
-        )
-        self.zoom_display.pack(side='left', padx=5)
-        
-        tk.Button(
-            zoom_frame,
-            text="🔍+",
-            command=self.zoom_in,
-            bg=self.theme.get_colors()['select_bg'],
-            fg=self.theme.get_colors()['fg'],
-            font=('Segoe UI', 9),
-            width=4,
-            pady=5,
-            relief='flat'
-        ).pack(side='left', padx=2)
-        
-        # Rotation button
-        tk.Button(
-            zoom_frame,
-            text="🔄",
-            command=self.rotate_page,
-            bg=self.theme.get_colors()['info'],
-            fg='white',
-            font=('Segoe UI', 9),
-            width=4,
-            pady=5,
-            relief='flat'
-        ).pack(side='left', padx=(10, 2))
-    
-    def create_placeholder(self):
-        """Create placeholder when PDF support is not available"""
-        self.pdf_frame = tk.Frame(self.parent, bg=self.theme.get_colors()['bg'])
-        
-        # Center container
-        center_frame = tk.Frame(self.pdf_frame, bg=self.theme.get_colors()['bg'])
-        center_frame.place(relx=0.5, rely=0.5, anchor='center')
-        
-        # Icon
-        tk.Label(
-            center_frame,
-            text="📄",
-            font=("Segoe UI", 48),
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['primary']
-        ).pack(pady=20)
-        
-        # Title
-        tk.Label(
-            center_frame,
-            text="PDF Viewer Not Available",
-            font=("Segoe UI", 18, "bold"),
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg']
-        ).pack(pady=10)
-        
-        # Instructions
-        tk.Label(
-            center_frame,
-            text="To enable PDF viewing, please install PyMuPDF:",
-            font=("Segoe UI", 12),
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg']
-        ).pack(pady=5)
-        
-        # Command
-        command_frame = tk.Frame(center_frame, bg=self.theme.get_colors()['editor_bg'], relief='solid', bd=1)
-        command_frame.pack(pady=10, padx=20)
-        
-        tk.Label(
-            command_frame,
-            text="pip install PyMuPDF",
-            font=("Consolas", 12, "bold"),
-            bg=self.theme.get_colors()['editor_bg'],
-            fg=self.theme.get_colors()['success'],
-            padx=15,
-            pady=8
-        ).pack()
-        
-                # Install button
-        tk.Button(
-            center_frame,
-            text="📥 Install PyMuPDF",
-            command=self.install_pymupdf,
-            bg=self.theme.get_colors()['success'],
-            fg='white',
-            font=("Segoe UI", 11, "bold"),
-            padx=20,
-            pady=10,
-            relief='flat',
-            cursor='hand2'
-        ).pack(pady=15)
-    
-    def install_pymupdf(self):
-        """Install PyMuPDF package"""
-        def install_thread():
-            try:
-                import subprocess
-                result = subprocess.run([sys.executable, "-m", "pip", "install", "PyMuPDF"], 
-                                      capture_output=True, text=True)
-                if result.returncode == 0:
-                    messagebox.showinfo("Success", "PyMuPDF installed successfully!\nPlease restart the application.")
-                else:
-                    messagebox.showerror("Error", f"Installation failed:\n{result.stderr}")
-            except Exception as e:
-                messagebox.showerror("Error", f"Installation failed:\n{str(e)}")
-        
-        threading.Thread(target=install_thread, daemon=True).start()
-    
-    def open_pdf(self):
-        """Open PDF file"""
-        if not HAS_PDF_SUPPORT:
-            messagebox.showerror("Error", "PDF support not available. Install PyMuPDF first.")
-            return
-        
-        file_path = filedialog.askopenfilename(
-            title="Open PDF File",
-            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")]
-        )
-        
-        if file_path:
-            try:
-                self.current_pdf = fitz.open(file_path)
-                self.current_page = 0
-                self.zoom_level = 1.0
-                self.rotation = 0
-                self.display_page()
-                logger.info(f"PDF opened: {file_path}")
-            except Exception as e:
-                messagebox.showerror("Error", f"Could not open PDF file:\n{str(e)}")
-                logger.error(f"Error opening PDF: {e}")
-    
-    def display_page(self):
-        """Display current PDF page"""
-        if not self.current_pdf or not HAS_PDF_SUPPORT:
-            return
-        
-        try:
-            page = self.current_pdf[self.current_page]
-            
-            # Apply transformations
-            mat = fitz.Matrix(self.zoom_level, self.zoom_level)
-            if self.rotation != 0:
-                mat = mat * fitz.Matrix(self.rotation)
-            
-            # Render page
-            pix = page.get_pixmap(matrix=mat)
-            img_data = pix.tobytes("ppm")
-            
-            # Update canvas
-            self.pdf_canvas.delete("all")
-            self.pdf_image = tk.PhotoImage(data=img_data)
-            
-            # Center the image
-            canvas_width = self.pdf_canvas.winfo_width()
-            canvas_height = self.pdf_canvas.winfo_height()
-            img_width = self.pdf_image.width()
-            img_height = self.pdf_image.height()
-            
-            x = max(0, (canvas_width - img_width) // 2)
-            y = max(0, (canvas_height - img_height) // 2)
-            
-            self.pdf_canvas.create_image(x, y, anchor='nw', image=self.pdf_image)
-            self.pdf_canvas.configure(scrollregion=self.pdf_canvas.bbox("all"))
-            
-            # Update page info
-            self.page_label.config(text=f"Page {self.current_page + 1} of {len(self.current_pdf)}")
-            self.zoom_display.config(text=f"{int(self.zoom_level * 100)}%")
-            
-        except Exception as e:
-            messagebox.showerror("Error", f"Could not display page:\n{str(e)}")
-            logger.error(f"Error displaying page: {e}")
-    
-    def prev_page(self):
-        """Go to previous page"""
-        if self.current_pdf and self.current_page > 0:
-            self.current_page -= 1
-            self.display_page()
-    
-    def next_page(self):
-        """Go to next page"""
-        if self.current_pdf and self.current_page < len(self.current_pdf) - 1:
-            self.current_page += 1
-            self.display_page()
-    
-    def zoom_in(self):
-        """Increase zoom level"""
-        if self.zoom_level < 3.0:
-            self.zoom_level *= 1.2
-            self.display_page()
-    
-    def zoom_out(self):
-        """Decrease zoom level"""
-        if self.zoom_level > 0.2:
-            self.zoom_level /= 1.2
-            self.display_page()
-    
-    def rotate_page(self):
-        """Rotate page 90 degrees clockwise"""
-        self.rotation += 90
-        if self.rotation >= 360:
-            self.rotation = 0
-        self.display_page()
-    
-    def on_mouse_wheel(self, event):
-        """Handle mouse wheel events"""
-        if event.state & 0x4:  # Ctrl key pressed
-            if event.delta > 0:
-                self.zoom_in()
-            else:
-                self.zoom_out()
-        else:
-            # Normal scrolling
-            self.pdf_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-    
-    def get_frame(self):
-        """Get the main PDF frame"""
-        return self.pdf_frame
-
-class ConfigManager:
-    """Advanced configuration management"""
-    
-    def __init__(self, config_file=CONFIG_FILE):
-        self.config_file = config_file
-        self.config = self.load_config()
-        logger.info("ConfigManager initialized")
-    
-    def load_config(self):
-        """Load configuration from file"""
-        default_config = {
-            'version': CURRENT_VERSION,
-            'theme': 'dark',
-            'window_geometry': '1200x800',
-            'window_state': 'normal',
-            'window_maximized': False,
-            'editor_font_family': 'Consolas',
-            'editor_font_size': 11,
-            'editor_zoom': 100,
-            'editor_word_wrap': False,
-            'editor_syntax_highlighting': True,
-            'auto_save': True,
-            'auto_save_interval': 30,
-            'create_backups': True,
-            'check_updates_on_startup': True,
-            'last_update_check': '',
-            'recent_files': [],
-            'max_recent_files': 10,
-            'user_name': '',
-            'user_email': '',
-            'pdf_zoom_level': 1.0,
-            'pdf_rotation': 0,
-            'show_line_numbers': True,
-            'show_status_bar': True,
-            'show_toolbar': True,
-            'language_preferences': {},
-            'custom_shortcuts': {}
-        }
-        
-        try:
-            if os.path.exists(self.config_file):
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    loaded_config = json.load(f)
-                    # Merge with defaults
-                    for key, value in default_config.items():
-                        if key not in loaded_config:
-                            loaded_config[key] = value
-                    return loaded_config
-        except Exception as e:
-            logger.error(f"Error loading config: {e}")
-        
-        return default_config
-    
-    def save_config(self):
-        """Save configuration to file"""
-        try:
-            # Create backup of existing config
-            if os.path.exists(self.config_file):
-                backup_file = f"{self.config_file}.backup"
-                import shutil
-                shutil.copy2(self.config_file, backup_file)
-            
-            # Save new config
-            with open(self.config_file, 'w', encoding='utf-8') as f:
-                json.dump(self.config, f, indent=2, ensure_ascii=False)
-            
-            logger.info("Configuration saved")
-        except Exception as e:
-            logger.error(f"Error saving config: {e}")
-    
-    def get(self, key, default=None):
-        """Get configuration value"""
-        return self.config.get(key, default)
-    
-    def set(self, key, value):
-        """Set configuration value"""
-        self.config[key] = value
-    
-    def update(self, updates):
-        """Update multiple configuration values"""
-        self.config.update(updates)
-
-class FileManager:
-    """Advanced file management with backup and recovery"""
-    
-    def __init__(self, config_manager):
-        self.config = config_manager
-        self.current_file = None
-        self.unsaved_changes = False
-        self.auto_save_timer = None
-        
-        # Create backup directory
-        if not os.path.exists(BACKUP_DIR):
-            os.makedirs(BACKUP_DIR)
-        
-        logger.info("FileManager initialized")
-    
-    def new_file(self):
-        """Create new file"""
-        if self.unsaved_changes:
-            if not self.ask_save_changes():
-                return False
-        
-        self.current_file = None
-        self.unsaved_changes = False
-        self.stop_auto_save()
-        return True
-    
-    def open_file(self, file_path=None):
-        """Open file"""
-        if self.unsaved_changes:
-            if not self.ask_save_changes():
-                return None
-        
-        if not file_path:
-            file_path = filedialog.askopenfilename(
-                title="Open File",
-                filetypes=[
-                    ("Text files", "*.txt"),
-                    ("Python files", "*.py"),
-                    ("JavaScript files", "*.js"),
-                    ("HTML files", "*.html"),
-                    ("CSS files", "*.css"),
-                    ("JSON files", "*.json"),
-                    ("XML files", "*.xml"),
-                    ("Markdown files", "*.md"),
-                    ("All files", "*.*")
-                ]
-            )
-        
-        if file_path and os.path.exists(file_path):
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                
-                self.current_file = file_path
-                self.unsaved_changes = False
-                self.add_to_recent_files(file_path)
-                self.start_auto_save()
-                
-                logger.info(f"File opened: {file_path}")
-                return content
-                
-            except Exception as e:
-                messagebox.showerror("Error", f"Could not open file:\n{str(e)}")
-                logger.error(f"Error opening file: {e}")
-        
-        return None
-    
-    def save_file(self, content, file_path=None):
-        """Save file"""
-        if not file_path:
-            file_path = self.current_file
-        
-        if not file_path:
-            return self.save_file_as(content)
-        
-        try:
-            # Create backup if enabled
-            if self.config.get('create_backups', True) and os.path.exists(file_path):
-                self.create_backup(file_path)
-            
-            # Save file
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-            
-            self.current_file = file_path
-            self.unsaved_changes = False
-            self.add_to_recent_files(file_path)
-            
-            logger.info(f"File saved: {file_path}")
-            return True
-            
-        except Exception as e:
-            messagebox.showerror("Error", f"Could not save file:\n{str(e)}")
-            logger.error(f"Error saving file: {e}")
-            return False
-    
-    def save_file_as(self, content):
-        """Save file as"""
-        file_path = filedialog.asksaveasfilename(
-            title="Save File As",
-            defaultextension=".txt",
-            filetypes=[
-                ("Text files", "*.txt"),
-                ("Python files", "*.py"),
-                ("JavaScript files", "*.js"),
-                ("HTML files", "*.html"),
-                ("CSS files", "*.css"),
-                ("JSON files", "*.json"),
-                ("XML files", "*.xml"),
-                ("Markdown files", "*.md"),
-                ("All files", "*.*")
-            ]
-        )
-        
-        if file_path:
-            return self.save_file(content, file_path)
-        
-        return False
-    
-    def create_backup(self, file_path):
-        """Create backup of file"""
-        try:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = os.path.basename(file_path)
-            backup_name = f"{filename}.{timestamp}.backup"
-            backup_path = os.path.join(BACKUP_DIR, backup_name)
-            
-            import shutil
-            shutil.copy2(file_path, backup_path)
-            
-            # Clean old backups (keep only last 10)
-            self.cleanup_backups(filename)
-            
-        except Exception as e:
-            logger.error(f"Error creating backup: {e}")
-    
-    def cleanup_backups(self, filename):
-        """Clean up old backup files"""
-        try:
-            backup_files = []
-            for f in os.listdir(BACKUP_DIR):
-                if f.startswith(filename + '.') and f.endswith('.backup'):
-                    backup_path = os.path.join(BACKUP_DIR, f)
-                    backup_files.append((backup_path, os.path.getmtime(backup_path)))
-            
-            # Sort by modification time (newest first)
-            backup_files.sort(key=lambda x: x[1], reverse=True)
-            
-            # Remove old backups (keep only 10 most recent)
-            for backup_path, _ in backup_files[10:]:
-                os.remove(backup_path)
+                self.no_update.emit(f"You're running the latest version ({CURRENT_VERSION})!")
                 
         except Exception as e:
-            logger.error(f"Error cleaning backups: {e}")
+            error_msg = f"Could not check for updates: {str(e)}"
+            self.update_error.emit(error_msg)
     
-    def add_to_recent_files(self, file_path):
-        """Add file to recent files list"""
-        recent_files = self.config.get('recent_files', [])
-        
-        # Remove if already exists
-        if file_path in recent_files:
-            recent_files.remove(file_path)
-        
-        # Add to beginning
-        recent_files.insert(0, file_path)
-        
-        # Keep only specified number of recent files
-        max_recent = self.config.get('max_recent_files', 10)
-        recent_files = recent_files[:max_recent]
-        
-        self.config.set('recent_files', recent_files)
-        self.config.save_config()
-    
-    def get_recent_files(self):
-        """Get list of recent files (existing only)"""
-        recent_files = self.config.get('recent_files', [])
-        return [f for f in recent_files if os.path.exists(f)]
-    
-    def start_auto_save(self):
-        """Start auto-save timer"""
-        if self.config.get('auto_save', True) and self.current_file:
-            interval = self.config.get('auto_save_interval', 30) * 1000  # Convert to milliseconds
-            self.stop_auto_save()  # Stop any existing timer
-            # Note: auto_save_timer will be set by the main app
-    
-    def stop_auto_save(self):
-        """Stop auto-save timer"""
-        if self.auto_save_timer:
-            # This will be handled by the main app
-            pass
-    
-    def ask_save_changes(self):
-        """Ask user if they want to save changes"""
-        if not self.unsaved_changes:
-            return True
-        
-        result = messagebox.askyesnocancel(
-            "Unsaved Changes",
-            "You have unsaved changes. Do you want to save before continuing?"
-        )
-        
-        if result is True:  # Yes - save
-            return self.save_current_file()
-        elif result is False:  # No - don't save
-            return True
-        else:  # Cancel
-            return False
-    
-    def save_current_file(self):
-        """Save current file (placeholder - will be implemented by main app)"""
-        return True
-    
-    def set_unsaved_changes(self, has_changes):
-        """Set unsaved changes flag"""
-        self.unsaved_changes = has_changes
-
-class UpdateManager:
-    """Advanced update management system"""
-    
-    def __init__(self, config_manager):
-        self.config = config_manager
-        self.update_window = None
-        logger.info("UpdateManager initialized")
-    
-    def check_for_updates(self, silent=False):
-        """Check for updates"""
-        if not HAS_REQUESTS:
-            if not silent:
-                messagebox.showerror("Error", "Requests library not available for update checking.")
-            return
-        
-        def check_thread():
-            try:
-                response = requests.get(VERSION_URL, timeout=10)
-                response.raise_for_status()
-                
-                version_info = response.json()
-                latest_version = version_info.get("version", "")
-                download_url = version_info.get("installer_url", "")
-                release_notes = version_info.get("release_notes", "")
-                
-                # Update last check time
-                self.config.set('last_update_check', datetime.now().strftime("%Y-%m-%d %H:%M"))
-                self.config.save_config()
-                
-                if self.is_newer_version(latest_version, CURRENT_VERSION):
-                    if not silent:
-                        self.show_update_dialog(latest_version, download_url, release_notes)
-                    return True
-                else:
-                    if not silent:
-                        messagebox.showinfo("No Updates", f"You're running the latest version ({CURRENT_VERSION})! 🎉")
-                    return False
-                    
-            except Exception as e:
-                error_msg = f"Could not check for updates: {str(e)}"
-                if not silent:
-                    messagebox.showerror("Update Check Failed", error_msg)
-                logger.error(error_msg)
-                return False
-        
-        threading.Thread(target=check_thread, daemon=True).start()
-    
-    def is_newer_version(self, latest, current):
+    def _is_newer_version(self, latest, current):
         """Compare version numbers"""
         try:
             latest_parts = [int(x) for x in latest.split('.')]
@@ -1562,2979 +81,954 @@ class UpdateManager:
             return latest_parts > current_parts
         except:
             return False
+
+class UpdateDialog(QDialog):
+    """Dialog to show update information"""
+    def __init__(self, parent, update_info):
+        super().__init__(parent)
+        self.update_info = update_info
+        self.setWindowTitle("Update Available")
+        self.setModal(True)
+        self.resize(500, 400)
+        self.setup_ui()
+        self.apply_styles()
     
-    def show_update_dialog(self, latest_version, download_url, release_notes):
-        """Show update available dialog"""
-        if self.update_window and self.update_window.winfo_exists():
-            self.update_window.lift()
-            return
-        
-        self.update_window = tk.Toplevel()
-        self.update_window.title("Update Available")
-        self.update_window.geometry("600x500")
-        self.update_window.resizable(False, False)
-        self.update_window.configure(bg='#2b2b2b')
-        self.update_window.transient()
-        self.update_window.grab_set()
-        
-        # Center the window
-        self.update_window.update_idletasks()
-        x = (self.update_window.winfo_screenwidth() // 2) - (600 // 2)
-        y = (self.update_window.winfo_screenheight() // 2) - (500 // 2)
-        self.update_window.geometry(f"600x500+{x}+{y}")
+    def setup_ui(self):
+        """Setup the update dialog UI"""
+        layout = QVBoxLayout(self)
         
         # Header
-        header_frame = tk.Frame(self.update_window, bg='#0078d4', height=100)
-        header_frame.pack(fill='x')
-        header_frame.pack_propagate(False)
+        header_frame = QFrame()
+        header_frame.setObjectName("updateHeader")
+        header_layout = QVBoxLayout(header_frame)
         
-        tk.Label(
-            header_frame,
-            text="🚀 Update Available!",
-            font=("Segoe UI", 20, "bold"),
-            bg='#0078d4',
-            fg='white'
-        ).pack(pady=20)
+        title_label = QLabel("🚀 Update Available!")
+        title_label.setObjectName("updateTitle")
+        title_label.setAlignment(Qt.AlignCenter)
+        header_layout.addWidget(title_label)
         
-        tk.Label(
-            header_frame,
-            text=f"Version {latest_version} is now available (Current: {CURRENT_VERSION})",
-            font=("Segoe UI", 12),
-            bg='#0078d4',
-            fg='white'
-        ).pack()
+        version_label = QLabel(f"Version {self.update_info.get('version', 'Unknown')} is now available")
+        version_label.setObjectName("updateVersion")
+        version_label.setAlignment(Qt.AlignCenter)
+        header_layout.addWidget(version_label)
+        
+        current_label = QLabel(f"Current version: {CURRENT_VERSION}")
+        current_label.setObjectName("updateCurrent")
+        current_label.setAlignment(Qt.AlignCenter)
+        header_layout.addWidget(current_label)
+        
+        layout.addWidget(header_frame)
         
         # Release notes
-        notes_frame = tk.LabelFrame(
-            self.update_window,
-            text="What's New",
-            font=("Segui UI", 12, "bold"),
-            bg='#2b2b2b',
-            fg='white'
-        )
-        notes_frame.pack(fill='both', expand=True, padx=20, pady=20)
+        notes_label = QLabel("What's New:")
+        notes_label.setObjectName("notesLabel")
+        layout.addWidget(notes_label)
         
-        notes_text = scrolledtext.ScrolledText(
-            notes_frame,
-            wrap=tk.WORD,
-            font=("Segoe UI", 10),
-            bg='#1e1e1e',
-            fg='#d4d4d4',
-            height=12
-        )
-        notes_text.pack(fill='both', expand=True, padx=10, pady=10)
-        notes_text.insert(1.0, release_notes)
-        notes_text.config(state='disabled')
+        self.notes_browser = QTextBrowser()
+        self.notes_browser.setObjectName("notesBrowser")
+        self.notes_browser.setPlainText(self.update_info.get('release_notes', 'No release notes available.'))
+        layout.addWidget(self.notes_browser)
         
         # Buttons
-        button_frame = tk.Frame(self.update_window, bg='#2b2b2b')
-        button_frame.pack(fill='x', padx=20, pady=(0, 20))
+        button_layout = QHBoxLayout()
         
-        tk.Button(
-            button_frame,
-            text="📥 Download & Install",
-            command=lambda: self.download_update(download_url),
-            bg='#28a745',
-            fg='white',
-            font=("Segoe UI", 12, "bold"),
-            padx=20,
-            pady=10,
-            relief='flat'
-        ).pack(side='right', padx=(10, 0))
+        later_btn = QPushButton("⏰ Later")
+        later_btn.setObjectName("laterButton")
+        later_btn.clicked.connect(self.reject)
+        button_layout.addWidget(later_btn)
         
-        tk.Button(
-            button_frame,
-            text="⏰ Later",
-            command=self.update_window.destroy,
-            bg='#6c757d',
-            fg='white',
-            font=("Segoe UI", 12),
-            padx=20,
-            pady=10,
-            relief='flat'
-        ).pack(side='right')
+        download_btn = QPushButton("📥 Download & Install")
+        download_btn.setObjectName("downloadButton")
+        download_btn.clicked.connect(self.download_update)
+        button_layout.addWidget(download_btn)
+        
+        layout.addLayout(button_layout)
     
-    def download_update(self, download_url):
-        """Download and install update"""
-        self.update_window.destroy()
+    def apply_styles(self):
+        """Apply styles to the update dialog"""
+        style = """
+        QDialog {
+            background-color: #2b2b2b;
+            color: #ffffff;
+        }
         
+        QFrame#updateHeader {
+            background-color: #007acc;
+            border-radius: 8px;
+            margin: 10px;
+            padding: 20px;
+        }
+        
+        QLabel#updateTitle {
+            color: white;
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        
+        QLabel#updateVersion {
+            color: #e3f2fd;
+            font-size: 12px;
+            margin-bottom: 5px;
+        }
+        
+        QLabel#updateCurrent {
+            color: #bbdefb;
+            font-size: 10px;
+        }
+        
+        QLabel#notesLabel {
+            color: #ffffff;
+            font-size: 12px;
+            font-weight: bold;
+            margin: 10px 0 5px 0;
+        }
+        
+        QTextBrowser#notesBrowser {
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            border: 1px solid #3e3e42;
+            border-radius: 4px;
+            padding: 10px;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 11px;
+        }
+        
+        QPushButton#laterButton {
+            background-color: #404040;
+            color: #ffffff;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            font-size: 11px;
+        }
+        
+        QPushButton#laterButton:hover {
+            background-color: #4a4a4a;
+        }
+        
+        QPushButton#downloadButton {
+            background-color: #28a745;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+        
+        QPushButton#downloadButton:hover {
+            background-color: #218838;
+        }
+        """
+        self.setStyleSheet(style)
+    
+    def download_update(self):
+        """Download and install the update"""
+        download_url = self.update_info.get('installer_url', '')
+        if not download_url:
+            QMessageBox.warning(self, "Error", "No download URL available")
+            return
+        
+        # Show download dialog
+        self.accept()
+        self.parent().show_download_dialog(download_url)
+
+class DownloadDialog(QDialog):
+    """Dialog to show download progress"""
+    def __init__(self, parent, download_url):
+        super().__init__(parent)
+        self.download_url = download_url
+        self.setWindowTitle("Downloading Update")
+        self.setModal(True)
+        self.resize(400, 200)
+        self.setup_ui()
+        self.apply_styles()
+        self.start_download()
+    
+    def setup_ui(self):
+        """Setup the download dialog UI"""
+        layout = QVBoxLayout(self)
+        
+        # Title
+        title_label = QLabel("📥 Downloading Update...")
+        title_label.setObjectName("downloadTitle")
+        title_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title_label)
+        
+        # Progress bar
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0)  # Indeterminate progress
+        layout.addWidget(self.progress_bar)
+        
+        # Status label
+        self.status_label = QLabel("Preparing download...")
+        self.status_label.setObjectName("downloadStatus")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.status_label)
+    
+    def apply_styles(self):
+        """Apply styles to the download dialog"""
+        style = """
+        QDialog {
+            background-color: #2b2b2b;
+            color: #ffffff;
+        }
+        
+        QLabel#downloadTitle {
+            color: #007acc;
+            font-size: 14px;
+            font-weight: bold;
+            margin: 20px;
+        }
+        
+        QLabel#downloadStatus {
+            color: #cccccc;
+            font-size: 11px;
+            margin: 20px;
+        }
+        
+        QProgressBar {
+            border: 1px solid #3e3e42;
+            border-radius: 4px;
+            text-align: center;
+            margin: 10px;
+        }
+        
+        QProgressBar::chunk {
+            background-color: #007acc;
+            border-radius: 3px;
+        }
+        """
+        self.setStyleSheet(style)
+    
+    def start_download(self):
+        """Start downloading the update"""
         def download_thread():
             try:
-                # Show download progress (simplified)
-                messagebox.showinfo("Download", "Download started. The installer will launch automatically.")
+                requests = safe_import_requests()
+                if not requests:
+                    raise Exception("Requests library not available")
                 
-                response = requests.get(download_url, stream=True)
+                self.status_label.setText("Downloading installer...")
+                
+                response = requests.get(self.download_url, stream=True, timeout=30)
                 response.raise_for_status()
                 
                 # Save to temp directory
                 temp_dir = tempfile.gettempdir()
-                installer_path = os.path.join(temp_dir, "MyApp_Setup.exe")
+                installer_path = os.path.join(temp_dir, f"{APP_NAME.replace(' ', '_')}_Setup.exe")
                 
                 with open(installer_path, 'wb') as f:
                     for chunk in response.iter_content(chunk_size=8192):
                         if chunk:
                             f.write(chunk)
                 
-                # Launch installer
+                self.status_label.setText("Download complete! Starting installer...")
+                
+                # Start installer
                 subprocess.Popen([installer_path])
                 
                 # Close application
-                messagebox.showinfo("Update", "Installer launched. Application will close now.")
-                os._exit(0)
+                QApplication.quit()
                 
             except Exception as e:
-                messagebox.showerror("Download Failed", f"Could not download update:\n{str(e)}")
+                self.progress_bar.setRange(0, 1)
+                self.progress_bar.setValue(0)
+                self.status_label.setText(f"Download failed: {str(e)}")
+                
+                # Add close button
+                close_btn = QPushButton("Close")
+                close_btn.clicked.connect(self.reject)
+                self.layout().addWidget(close_btn)
         
-        threading.Thread(target=download_thread, daemon=True).start()
+        # Start download in separate thread
+        self.download_thread = threading.Thread(target=download_thread, daemon=True)
+        self.download_thread.start()
 
-class ModernApp:
-    """Main application class with modern UI and advanced features"""
-    
+class ModernApp(QMainWindow):
     def __init__(self):
-        self.root = tk.Tk()
-        self.root.title(f"{APP_NAME} v{CURRENT_VERSION}")
-        self.root.geometry("1200x800")
-        self.root.minsize(800, 600)
+        super().__init__()
+        self.setWindowTitle(f"{APP_NAME} v{CURRENT_VERSION}")
+        self.setGeometry(100, 100, 1200, 800)
         
-        # Initialize managers
-        self.config = ConfigManager()
-        self.theme = ThemeManager()
-        self.file_manager = FileManager(self.config)
-        self.update_manager = UpdateManager(self.config)
+        # Initialize components
+        self.config = self.load_config()
+        self.current_file = None
+        self.unsaved_changes = False
         
-        # Apply saved theme
-        saved_theme = self.config.get('theme', 'dark')
-        self.theme.switch_theme(saved_theme)
+        # Setup UI
+        self.setup_ui()
+        self.apply_styles()
         
-        # Set application icon
-        try:
-            self.root.iconbitmap("icon.ico")
-        except:
-            pass
+        # Connect signals
+        self.setup_connections()
         
-        # Initialize UI
-        self.create_ui()
-        self.apply_theme()
-        
-        # Auto-save timer
-        self.auto_save_timer = None
-        
-        # Start auto-save if enabled
-        if self.config.get('auto_save', True):
-            self.start_auto_save_timer()
-        
-        # Check for updates on startup
+        # Check for updates on startup if enabled
         if self.config.get('check_updates_on_startup', True):
-            self.root.after(5000, lambda: self.update_manager.check_for_updates(silent=True))
-        
-        logger.info("ModernApp initialized")
+            QTimer.singleShot(5000, self.check_for_updates_silent)  # Wait 5 seconds
     
-    def create_ui(self):
-        """Create the main user interface"""
-        # Create menu bar
-        self.create_menu_bar()
+    def setup_ui(self):
+        """Setup the main user interface"""
+        # Create central widget
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
         
-        # Main container
-        main_container = tk.Frame(self.root, bg=self.theme.get_colors()['bg'])
-        main_container.pack(fill='both', expand=True)
+        # Main layout
+        main_layout = QHBoxLayout(central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        
+        # Create splitter
+        splitter = QSplitter(Qt.Horizontal)
+        main_layout.addWidget(splitter)
         
         # Create sidebar
-        self.create_sidebar(main_container)
+        self.create_sidebar(splitter)
         
         # Create main content area
-        self.create_main_content(main_container)
+        self.create_main_content(splitter)
+        
+        # Set splitter proportions
+        splitter.setSizes([250, 950])
+        
+        # Create menu bar
+        self.create_menu_bar()
         
         # Create status bar
         self.create_status_bar()
     
-    def create_menu_bar(self):
-        """Create application menu bar"""
-        self.menubar = tk.Menu(self.root)
-        self.root.config(menu=self.menubar)
-        
-        # File menu
-        file_menu = tk.Menu(self.menubar, tearoff=0)
-        self.menubar.add_cascade(label="File", menu=file_menu)
-        file_menu.add_command(label="New", command=self.new_file, accelerator="Ctrl+N")
-        file_menu.add_command(label="Open", command=self.open_file, accelerator="Ctrl+O")
-        file_menu.add_command(label="Save", command=self.save_file, accelerator="Ctrl+S")
-        file_menu.add_command(label="Save As", command=self.save_file_as, accelerator="Ctrl+Shift+S")
-        file_menu.add_separator()
-        
-        # Recent files submenu
-        self.recent_menu = tk.Menu(file_menu, tearoff=0)
-        file_menu.add_cascade(label="Recent Files", menu=self.recent_menu)
-        self.update_recent_menu()
-        
-        file_menu.add_separator()
-        if HAS_PDF_EXPORT:
-            file_menu.add_command(label="Export to PDF", command=self.export_to_pdf)
-            file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.on_closing)
-        
-        # Edit menu
-        edit_menu = tk.Menu(self.menubar, tearoff=0)
-        self.menubar.add_cascade(label="Edit", menu=edit_menu)
-        edit_menu.add_command(label="Undo", command=self.undo, accelerator="Ctrl+Z")
-        edit_menu.add_command(label="Redo", command=self.redo, accelerator="Ctrl+Y")
-        edit_menu.add_separator()
-        edit_menu.add_command(label="Cut", command=self.cut, accelerator="Ctrl+X")
-        edit_menu.add_command(label="Copy", command=self.copy, accelerator="Ctrl+C")
-        edit_menu.add_command(label="Paste", command=self.paste, accelerator="Ctrl+V")
-        edit_menu.add_command(label="Select All", command=self.select_all, accelerator="Ctrl+A")
-        edit_menu.add_separator()
-        edit_menu.add_command(label="Find & Replace", command=self.show_find_replace, accelerator="Ctrl+F")
-        
-        # View menu
-        view_menu = tk.Menu(self.menubar, tearoff=0)
-        self.menubar.add_cascade(label="View", menu=view_menu)
-        
-        # Theme submenu
-        theme_menu = tk.Menu(view_menu, tearoff=0)
-        view_menu.add_cascade(label="Themes", menu=theme_menu)
-        theme_menu.add_command(label="Dark Professional", command=lambda: self.switch_theme('dark'))
-        theme_menu.add_command(label="Light Professional", command=lambda: self.switch_theme('light'))
-        theme_menu.add_command(label="High Contrast", command=lambda: self.switch_theme('high_contrast'))
-        
-        view_menu.add_separator()
-        view_menu.add_command(label="Toggle Line Numbers", command=self.toggle_line_numbers)
-        view_menu.add_command(label="Word Count", command=self.show_word_count)
-        
-        # Tools menu
-        tools_menu = tk.Menu(self.menubar, tearoff=0)
-        self.menubar.add_cascade(label="Tools", menu=tools_menu)
-        tools_menu.add_command(label="Settings", command=self.show_settings)
-        tools_menu.add_command(label="Check for Updates", command=lambda: self.update_manager.check_for_updates())
-        
-        # Help menu
-        help_menu = tk.Menu(self.menubar, tearoff=0)
-        self.menubar.add_cascade(label="Help", menu=help_menu)
-        help_menu.add_command(label="About", command=self.show_about)
-        help_menu.add_command(label="View Logs", command=self.show_logs)
-        help_menu.add_command(label="Visit GitHub", command=self.open_github)
-        
-        # Bind keyboard shortcuts
-        self.bind_shortcuts()
-    
-    def bind_shortcuts(self):
-        """Bind keyboard shortcuts"""
-        shortcuts = {
-            '<Control-n>': lambda e: self.new_file(),
-            '<Control-o>': lambda e: self.open_file(),
-            '<Control-s>': lambda e: self.save_file(),
-            '<Control-Shift-S>': lambda e: self.save_file_as(),
-            '<Control-z>': lambda e: self.undo(),
-            '<Control-y>': lambda e: self.redo(),
-            '<Control-x>': lambda e: self.cut(),
-            '<Control-c>': lambda e: self.copy(),
-            '<Control-v>': lambda e: self.paste(),
-            '<Control-a>': lambda e: self.select_all(),
-            '<Control-f>': lambda e: self.show_find_replace(),
-            '<Control-h>': lambda e: self.show_find_replace(),
-            '<F5>': lambda e: self.update_manager.check_for_updates(),
-            '<F11>': lambda e: self.toggle_fullscreen(),
-            '<Control-plus>': lambda e: self.zoom_in(),
-            '<Control-minus>': lambda e: self.zoom_out(),
-            '<Control-0>': lambda e: self.reset_zoom()
-        }
-        
-        for shortcut, command in shortcuts.items():
-            self.root.bind(shortcut, command)
-    
     def create_sidebar(self, parent):
-        """Create application sidebar"""
-        self.sidebar = tk.Frame(parent, bg=self.theme.get_colors()['sidebar_bg'], width=280)
-        self.sidebar.pack(side='left', fill='y')
-        self.sidebar.pack_propagate(False)
+        """Create sidebar with navigation and stats"""
+        sidebar = QFrame()
+        sidebar.setObjectName("sidebar")
+        sidebar.setFixedWidth(250)
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
         
         # App header
-        header_frame = tk.Frame(self.sidebar, bg=self.theme.get_colors()['primary'], height=80)
-        header_frame.pack(fill='x')
-        header_frame.pack_propagate(False)
+        header_frame = QFrame()
+        header_frame.setObjectName("sidebarHeader")
+        header_frame.setFixedHeight(80)
+        header_layout = QVBoxLayout(header_frame)
         
-        tk.Label(
-            header_frame,
-            text="🚀",
-            font=("Segoe UI", 24),
-            bg=self.theme.get_colors()['primary'],
-            fg='white'
-        ).pack(side='left', padx=15, pady=20)
+        app_title = QLabel(APP_NAME)
+        app_title.setObjectName("appTitle")
+        app_title.setAlignment(Qt.AlignCenter)
+        header_layout.addWidget(app_title)
         
-        title_frame = tk.Frame(header_frame, bg=self.theme.get_colors()['primary'])
-        title_frame.pack(side='left', fill='both', expand=True, pady=20)
+        sidebar_layout.addWidget(header_frame)
         
-        tk.Label(
-            title_frame,
-            text=APP_NAME,
-            font=("Segoe UI", 14, "bold"),
-            bg=self.theme.get_colors()['primary'],
-            fg='white',
-            anchor='w'
-        ).pack(fill='x')
+                # Quick Actions
+        actions_group = QGroupBox("Quick Actions")
+        actions_group.setObjectName("actionsGroup")
+        actions_layout = QVBoxLayout(actions_group)
         
-        tk.Label(
-            title_frame,
-            text=f"v{CURRENT_VERSION}",
-            font=("Segoe UI", 9),
-            bg=self.theme.get_colors()['primary'],
-            fg='white',
-            anchor='w'
-        ).pack(fill='x')
-        
-        # Quick actions
-        self.create_quick_actions()
-        
-        # Document stats
-        self.create_document_stats()
-        
-        # Recent files
-        self.create_recent_files_section()
-    
-    def create_quick_actions(self):
-        """Create quick actions section"""
-        actions_frame = tk.LabelFrame(
-            self.sidebar,
-            text="Quick Actions",
-            font=("Segoe UI", 11, "bold"),
-            bg=self.theme.get_colors()['sidebar_bg'],
-            fg=self.theme.get_colors()['fg'],
-            padx=10,
-            pady=10
-        )
-        actions_frame.pack(fill='x', padx=15, pady=15)
-        
+        # Action buttons
         actions = [
-            ("📄 New File", self.new_file, self.theme.get_colors()['success']),
-            ("📂 Open File", self.open_file, self.theme.get_colors()['primary']),
-            ("💾 Save File", self.save_file, self.theme.get_colors()['info']),
-            ("🔍 Find & Replace", self.show_find_replace, self.theme.get_colors()['warning'])
+            ("📄 New File", self.new_file),
+            ("📂 Open File", self.open_file),
+            ("💾 Save File", self.save_file),
+            ("🔍 Find", self.show_find_dialog)
         ]
         
-        for text, command, color in actions:
-            btn = tk.Button(
-                actions_frame,
-                text=text,
-                command=command,
-                bg=color,
-                fg='white',
-                font=("Segoe UI", 10, "bold"),
-                relief='flat',
-                padx=15,
-                pady=8,
-                anchor='w',
-                cursor='hand2'
-            )
-            btn.pack(fill='x', pady=2)
-            
-            # Hover effects
-            def on_enter(e, button=btn, orig_color=color):
-                button.configure(bg=self.lighten_color(orig_color))
-            
-            def on_leave(e, button=btn, orig_color=color):
-                button.configure(bg=orig_color)
-            
-            btn.bind("<Enter>", on_enter)
-            btn.bind("<Leave>", on_leave)
-    
-    def create_document_stats(self):
-        """Create document statistics section"""
-        stats_frame = tk.LabelFrame(
-            self.sidebar,
-            text="Document Statistics",
-            font=("Segoe UI", 11, "bold"),
-            bg=self.theme.get_colors()['sidebar_bg'],
-            fg=self.theme.get_colors()['fg'],
-            padx=10,
-            pady=10
-        )
-        stats_frame.pack(fill='x', padx=15, pady=(0, 15))
+        for text, command in actions:
+            btn = QPushButton(text)
+            btn.setObjectName("actionButton")
+            btn.clicked.connect(command)
+            actions_layout.addWidget(btn)
         
-        self.stats_labels = {}
-        stats_info = [
-            ("lines", "Lines: 0"),
-            ("words", "Words: 0"),
-            ("chars", "Characters: 0"),
-            ("selected", "Selected: 0")
-        ]
+        sidebar_layout.addWidget(actions_group)
         
-        for key, text in stats_info:
-            label = tk.Label(
-                stats_frame,
-                text=text,
-                font=("Segoe UI", 10),
-                bg=self.theme.get_colors()['sidebar_bg'],
-                fg=self.theme.get_colors()['fg'],
-                anchor='w'
-            )
-            label.pack(fill='x', pady=2)
-            self.stats_labels[key] = label
+        # Document Stats
+        stats_group = QGroupBox("Document Stats")
+        stats_group.setObjectName("statsGroup")
+        stats_layout = QVBoxLayout(stats_group)
         
-        # Update stats regularly
-        self.update_document_stats()
-    
-    def create_recent_files_section(self):
-        """Create recent files section"""
-        recent_frame = tk.LabelFrame(
-            self.sidebar,
-            text="Recent Files",
-            font=("Segoe UI", 11, "bold"),
-            bg=self.theme.get_colors()['sidebar_bg'],
-            fg=self.theme.get_colors()['fg'],
-            padx=10,
-            pady=10
-        )
-        recent_frame.pack(fill='both', expand=True, padx=15, pady=(0, 15))
+        self.stats_label = QLabel("Lines: 0\nWords: 0\nCharacters: 0")
+        self.stats_label.setObjectName("statsLabel")
+        stats_layout.addWidget(self.stats_label)
         
-        # Recent files listbox
-        listbox_frame = tk.Frame(recent_frame, bg=self.theme.get_colors()['sidebar_bg'])
-        listbox_frame.pack(fill='both', expand=True)
+        sidebar_layout.addWidget(stats_group)
         
-        self.recent_listbox = tk.Listbox(
-            listbox_frame,
-            bg=self.theme.get_colors()['editor_bg'],
-            fg=self.theme.get_colors()['editor_fg'],
-            font=("Segoe UI", 9),
-            selectbackground=self.theme.get_colors()['primary'],
-            selectforeground='white',
-            relief='flat',
-            activestyle='none'
-        )
+        # Recent Files
+        recent_group = QGroupBox("Recent Files")
+        recent_group.setObjectName("recentGroup")
+        recent_layout = QVBoxLayout(recent_group)
         
-        recent_scrollbar = tk.Scrollbar(listbox_frame, orient='vertical', command=self.recent_listbox.yview)
-        self.recent_listbox.configure(yscrollcommand=recent_scrollbar.set)
+        self.recent_list = QListWidget()
+        self.recent_list.setObjectName("recentList")
+        self.recent_list.itemDoubleClicked.connect(self.open_recent_file)
+        recent_layout.addWidget(self.recent_list)
         
-        recent_scrollbar.pack(side='right', fill='y')
-        self.recent_listbox.pack(fill='both', expand=True)
+        sidebar_layout.addWidget(recent_group)
         
-        self.recent_listbox.bind('<Double-Button-1>', self.open_recent_from_list)
-        self.recent_listbox.bind('<Return>', self.open_recent_from_list)
+        # Add stretch to push everything up
+        sidebar_layout.addStretch()
         
+        parent.addWidget(sidebar)
+        
+        # Update recent files list
         self.update_recent_files_list()
     
     def create_main_content(self, parent):
-        """Create main content area"""
-        content_frame = tk.Frame(parent, bg=self.theme.get_colors()['bg'])
-        content_frame.pack(side='right', fill='both', expand=True)
-        
-        # Create notebook for tabs
-        self.notebook = ttk.Notebook(content_frame)
-        self.notebook.pack(fill='both', expand=True, padx=10, pady=10)
+        """Create main content area with tabs"""
+        # Create tab widget
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setObjectName("mainTabWidget")
         
         # Create tabs
+        self.create_home_tab()
         self.create_editor_tab()
-        self.create_pdf_viewer_tab()
-        self.create_welcome_tab()
+        self.create_settings_tab()
         
-        # Set welcome tab as default
-        self.notebook.select(2)  # Welcome tab
+        parent.addWidget(self.tab_widget)
     
-    def create_welcome_tab(self):
-        """Create welcome/home tab"""
-        welcome_frame = tk.Frame(self.notebook, bg=self.theme.get_colors()['bg'])
-        self.notebook.add(welcome_frame, text="🏠 Welcome")
+    def create_home_tab(self):
+        """Create home tab"""
+        home_widget = QWidget()
+        home_layout = QVBoxLayout(home_widget)
         
-        # Scrollable content
-        canvas = tk.Canvas(welcome_frame, bg=self.theme.get_colors()['bg'], highlightthickness=0)
-        scrollbar = tk.Scrollbar(welcome_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = tk.Frame(canvas, bg=self.theme.get_colors()['bg'])
+        # Scroll area for home content
+        scroll = QScrollArea()
+        scroll_widget = QWidget()
+        scroll_layout = QVBoxLayout(scroll_widget)
         
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
+        # Welcome section
+        welcome_frame = QFrame()
+        welcome_frame.setObjectName("welcomeFrame")
+        welcome_frame.setFixedHeight(150)
+        welcome_layout = QVBoxLayout(welcome_frame)
         
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
+        welcome_title = QLabel(f"Welcome to {APP_NAME}! 🎉")
+        welcome_title.setObjectName("welcomeTitle")
+        welcome_title.setAlignment(Qt.AlignCenter)
+        welcome_layout.addWidget(welcome_title)
         
-        # Welcome header
-        header_frame = tk.Frame(scrollable_frame, bg=self.theme.get_colors()['primary'], height=120)
-        header_frame.pack(fill='x', padx=20, pady=20)
-        header_frame.pack_propagate(False)
+        welcome_subtitle = QLabel(f"Version {CURRENT_VERSION} • Modern Text Editor")
+        welcome_subtitle.setObjectName("welcomeSubtitle")
+        welcome_subtitle.setAlignment(Qt.AlignCenter)
+        welcome_layout.addWidget(welcome_subtitle)
         
-        tk.Label(
-            header_frame,
-            text="🎉 Welcome to MyAwesome App!",
-            font=("Segoe UI", 20, "bold"),
-            bg=self.theme.get_colors()['primary'],
-            fg='white'
-        ).pack(pady=30)
+        scroll_layout.addWidget(welcome_frame)
         
-        tk.Label(
-            header_frame,
-            text=f"Version {CURRENT_VERSION} • Your Modern Text Editor & PDF Viewer",
-            font=("Segoe UI", 12),
-            bg=self.theme.get_colors()['primary'],
-            fg='white'
-        ).pack()
+        # Features section
+        features_title = QLabel("Features & Capabilities")
+        features_title.setObjectName("sectionTitle")
+        scroll_layout.addWidget(features_title)
         
-        # Features grid
-        features_frame = tk.Frame(scrollable_frame, bg=self.theme.get_colors()['bg'])
-        features_frame.pack(fill='x', padx=20, pady=20)
+        # Feature cards in a grid
+        features_widget = QWidget()
+        features_grid = QGridLayout(features_widget)
         
-        tk.Label(
-            features_frame,
-            text="✨ Features & Capabilities",
-            font=("Segoe UI", 16, "bold"),
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg']
-        ).pack(pady=(0, 20))
-        
-        # Feature cards
         features = [
-            ("📝 Advanced Text Editor", "Syntax highlighting, auto-complete, multiple themes", self.theme.get_colors()['success']),
-            ("📄 PDF Viewer", "View, zoom, rotate PDF documents with ease", self.theme.get_colors()['info']),
-            ("🎨 Modern Themes", "Professional dark, light, and high contrast themes", self.theme.get_colors()['primary']),
-            ("🔄 Auto-Save", "Never lose your work with intelligent auto-saving", self.theme.get_colors()['warning']),
-            ("🔍 Advanced Search", "Powerful find & replace with regex support", self.theme.get_colors()['secondary']),
-            ("⚡ Performance", "Fast, responsive interface with optimized rendering", self.theme.get_colors()['success'])
+            ("📝 Advanced Text Editor", "Syntax highlighting, find & replace, line numbers"),
+            ("🎨 Modern Themes", "Dark, light, and blue themes with professional styling"),
+            ("🔄 Auto-Updates", "Automatic update checking and installation"),
+            ("💾 Smart Saving", "Auto-save, backup creation, recent files"),
+            ("⚙️ Customizable", "Fonts, themes, editor preferences"),
+            ("🚀 Modern Interface", "Built with PyQt5 and CSS-like styling")
         ]
         
-        for i, (title, desc, color) in enumerate(features):
-            if i % 2 == 0:
-                row_frame = tk.Frame(features_frame, bg=self.theme.get_colors()['bg'])
-                row_frame.pack(fill='x', pady=5)
+        for i, (title, description) in enumerate(features):
+            row = i // 2
+            col = i % 2
             
-            card_frame = tk.Frame(row_frame, bg=color, relief='flat', bd=0)
-            card_frame.pack(side='left' if i % 2 == 0 else 'right', fill='both', expand=True, padx=(0, 5) if i % 2 == 0 else (5, 0))
+            card = QFrame()
+            card.setObjectName("featureCard")
+            card_layout = QVBoxLayout(card)
             
-            tk.Label(
-                card_frame,
-                text=title,
-                font=("Segoe UI", 12, "bold"),
-                bg=color,
-                fg='white'
-            ).pack(pady=(15, 5))
+            card_title = QLabel(title)
+            card_title.setObjectName("featureTitle")
+            card_layout.addWidget(card_title)
             
-            tk.Label(
-                card_frame,
-                text=desc,
-                font=("Segoe UI", 10),
-                bg=color,
-                fg='white',
-                wraplength=280,
-                justify='center'
-            ).pack(pady=(0, 15), padx=15)
-        
-        # Getting started section
-        start_frame = tk.LabelFrame(
-            scrollable_frame,
-            text="🚀 Getting Started",
-            font=("Segoe UI", 14, "bold"),
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg'],
-            padx=20,
-            pady=20
-        )
-        start_frame.pack(fill='x', padx=20, pady=20)
-        
-        steps = [
-            "1. 📄 Create a new file or open an existing document",
-            "2. ✏️ Use the advanced editor with syntax highlighting and auto-completion",
-            "3. 🔍 Use Ctrl+F to find and replace text with powerful search options",
-            "4. 💾 Save your work automatically or manually with Ctrl+S",
-            "5. 📋 Export to PDF format for professional document sharing",
-            "6. 🎨 Customize your experience with themes and settings"
-        ]
-        
-        for step in steps:
-            step_frame = tk.Frame(start_frame, bg=self.theme.get_colors()['bg'])
-            step_frame.pack(fill='x', pady=5)
+            card_desc = QLabel(description)
+            card_desc.setObjectName("featureDescription")
+            card_desc.setWordWrap(True)
+            card_layout.addWidget(card_desc)
             
-            tk.Label(
-                step_frame,
-                text=step,
-                font=("Segoe UI", 11),
-                bg=self.theme.get_colors()['bg'],
-                fg=self.theme.get_colors()['fg'],
-                anchor='w'
-            ).pack(fill='x')
+            features_grid.addWidget(card, row, col)
         
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        scroll_layout.addWidget(features_widget)
+        scroll_layout.addStretch()
+        
+        scroll.setWidget(scroll_widget)
+        scroll.setWidgetResizable(True)
+        home_layout.addWidget(scroll)
+        
+        self.tab_widget.addTab(home_widget, "🏠 Home")
     
     def create_editor_tab(self):
-        """Create text editor tab"""
-        editor_frame = tk.Frame(self.notebook, bg=self.theme.get_colors()['bg'])
-        self.notebook.add(editor_frame, text="📝 Text Editor")
+        """Create editor tab"""
+        editor_widget = QWidget()
+        editor_layout = QVBoxLayout(editor_widget)
         
-                # Create advanced text editor
-        self.text_editor = AdvancedTextEditor(editor_frame, self.theme)
-        self.text_editor.get_frame().pack(fill='both', expand=True)
+        # Editor toolbar
+        toolbar = QFrame()
+        toolbar.setObjectName("editorToolbar")
+        toolbar.setFixedHeight(50)
+        toolbar_layout = QHBoxLayout(toolbar)
         
-        # Connect file manager to editor
-        self.file_manager.save_current_file = self.save_current_file_content
+        # File operations
+        file_buttons = [
+            ("New", self.new_file),
+            ("Open", self.open_file),
+            ("Save", self.save_file),
+            ("Save As", self.save_file_as)
+        ]
+        
+        for text, command in file_buttons:
+            btn = QPushButton(text)
+            btn.setObjectName("toolbarButton")
+            btn.clicked.connect(command)
+            toolbar_layout.addWidget(btn)
+        
+        toolbar_layout.addStretch()
+        
+        # Edit operations
+        edit_buttons = [
+            ("Find", self.show_find_dialog),
+            ("Word Count", self.show_word_count)
+        ]
+        
+        for text, command in edit_buttons:
+            btn = QPushButton(text)
+            btn.setObjectName("toolbarButton")
+            btn.clicked.connect(command)
+            toolbar_layout.addWidget(btn)
+        
+        editor_layout.addWidget(toolbar)
+        
+        # Text editor
+        self.text_editor = QTextEdit()
+        self.text_editor.setObjectName("textEditor")
+        self.text_editor.setFont(QFont(self.config.get('font_family', 'Consolas'), 
+                                     self.config.get('font_size', 11)))
+        self.text_editor.textChanged.connect(self.on_text_changed)
+        editor_layout.addWidget(self.text_editor)
+        
+        self.tab_widget.addTab(editor_widget, "📝 Editor")
     
-    def create_pdf_viewer_tab(self):
-        """Create PDF viewer tab"""
-        pdf_frame = tk.Frame(self.notebook, bg=self.theme.get_colors()['bg'])
-        self.notebook.add(pdf_frame, text="📄 PDF Viewer")
+    def create_settings_tab(self):
+        """Create settings tab with update preferences"""
+        settings_widget = QWidget()
+        settings_layout = QVBoxLayout(settings_widget)
         
-        # Create PDF viewer
-        self.pdf_viewer = PDFViewer(pdf_frame, self.theme)
-        self.pdf_viewer.get_frame().pack(fill='both', expand=True)
+        # Settings scroll area
+        scroll = QScrollArea()
+        scroll_widget = QWidget()
+        scroll_layout = QVBoxLayout(scroll_widget)
+        
+        # Theme settings
+        theme_group = QGroupBox("Appearance")
+        theme_group.setObjectName("settingsGroup")
+        theme_layout = QGridLayout(theme_group)
+        
+        theme_layout.addWidget(QLabel("Theme:"), 0, 0)
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(["Dark", "Light", "Blue"])
+        self.theme_combo.setCurrentText(self.config.get('theme', 'Dark'))
+        self.theme_combo.currentTextChanged.connect(self.change_theme)
+        theme_layout.addWidget(self.theme_combo, 0, 1)
+        
+        scroll_layout.addWidget(theme_group)
+        
+        # Editor settings
+        editor_group = QGroupBox("Editor")
+        editor_group.setObjectName("settingsGroup")
+        editor_layout = QGridLayout(editor_group)
+        
+        editor_layout.addWidget(QLabel("Font Family:"), 0, 0)
+        self.font_combo = QComboBox()
+        self.font_combo.addItems(["Consolas", "Courier New", "Monaco", "Source Code Pro"])
+        self.font_combo.setCurrentText(self.config.get('font_family', 'Consolas'))
+        self.font_combo.currentTextChanged.connect(self.change_font)
+        editor_layout.addWidget(self.font_combo, 0, 1)
+        
+        editor_layout.addWidget(QLabel("Font Size:"), 1, 0)
+        self.font_size_spin = QSpinBox()
+        self.font_size_spin.setRange(8, 24)
+        self.font_size_spin.setValue(self.config.get('font_size', 11))
+        self.font_size_spin.valueChanged.connect(self.change_font_size)
+        editor_layout.addWidget(self.font_size_spin, 1, 1)
+        
+        self.auto_save_check = QCheckBox("Enable auto-save")
+        self.auto_save_check.setChecked(self.config.get('auto_save', True))
+        self.auto_save_check.toggled.connect(self.toggle_auto_save)
+        editor_layout.addWidget(self.auto_save_check, 2, 0, 1, 2)
+        
+        scroll_layout.addWidget(editor_group)
+        
+        # Update settings
+        update_group = QGroupBox("Updates")
+        update_group.setObjectName("settingsGroup")
+        update_layout = QVBoxLayout(update_group)
+        
+        self.auto_update_check = QCheckBox("Check for updates on startup")
+        self.auto_update_check.setChecked(self.config.get('check_updates_on_startup', True))
+        self.auto_update_check.toggled.connect(self.toggle_auto_update)
+        update_layout.addWidget(self.auto_update_check)
+        
+        # Last update check info
+        last_check = self.config.get('last_update_check', 'Never')
+        self.last_check_label = QLabel(f"Last checked: {last_check}")
+        self.last_check_label.setObjectName("lastCheckLabel")
+        update_layout.addWidget(self.last_check_label)
+        
+        # Manual update check button
+        check_now_btn = QPushButton("🔄 Check for Updates Now")
+        check_now_btn.setObjectName("checkUpdateButton")
+        check_now_btn.clicked.connect(self.check_for_updates_manual)
+        update_layout.addWidget(check_now_btn)
+        
+        scroll_layout.addWidget(update_group)
+        
+        # App info
+        info_group = QGroupBox("Application Info")
+        info_group.setObjectName("settingsGroup")
+        info_layout = QVBoxLayout(info_group)
+        
+        version_label = QLabel(f"Version: {CURRENT_VERSION}")
+        version_label.setObjectName("versionInfoLabel")
+        info_layout.addWidget(version_label)
+        
+        github_btn = QPushButton("🌐 Visit GitHub Repository")
+        github_btn.setObjectName("githubButton")
+        github_btn.clicked.connect(self.open_github)
+        info_layout.addWidget(github_btn)
+        
+        scroll_layout.addWidget(info_group)
+        
+        scroll_layout.addStretch()
+        
+        scroll.setWidget(scroll_widget)
+        scroll.setWidgetResizable(True)
+        settings_layout.addWidget(scroll)
+        
+        self.tab_widget.addTab(settings_widget, "⚙️ Settings")
+    
+    def create_menu_bar(self):
+        """Create menu bar"""
+        menubar = self.menuBar()
+        
+        # File menu
+        file_menu = menubar.addMenu('File')
+        
+        new_action = QAction('New', self)
+        new_action.setShortcut('Ctrl+N')
+        new_action.triggered.connect(self.new_file)
+        file_menu.addAction(new_action)
+        
+        open_action = QAction('Open', self)
+        open_action.setShortcut('Ctrl+O')
+        open_action.triggered.connect(self.open_file)
+        file_menu.addAction(open_action)
+        
+        save_action = QAction('Save', self)
+        save_action.setShortcut('Ctrl+S')
+        save_action.triggered.connect(self.save_file)
+        file_menu.addAction(save_action)
+        
+        save_as_action = QAction('Save As', self)
+        save_as_action.setShortcut('Ctrl+Shift+S')
+        save_as_action.triggered.connect(self.save_file_as)
+        file_menu.addAction(save_as_action)
+        
+        file_menu.addSeparator()
+        
+        exit_action = QAction('Exit', self)
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+        
+        # Edit menu
+        edit_menu = menubar.addMenu('Edit')
+        
+        undo_action = QAction('Undo', self)
+        undo_action.setShortcut('Ctrl+Z')
+        undo_action.triggered.connect(self.undo)
+        edit_menu.addAction(undo_action)
+        
+        redo_action = QAction('Redo', self)
+        redo_action.setShortcut('Ctrl+Y')
+        redo_action.triggered.connect(self.redo)
+        edit_menu.addAction(redo_action)
+        
+        edit_menu.addSeparator()
+        
+        cut_action = QAction('Cut', self)
+        cut_action.setShortcut('Ctrl+X')
+        cut_action.triggered.connect(self.cut)
+        edit_menu.addAction(cut_action)
+        
+        copy_action = QAction('Copy', self)
+        copy_action.setShortcut('Ctrl+C')
+        copy_action.triggered.connect(self.copy)
+        edit_menu.addAction(copy_action)
+        
+        paste_action = QAction('Paste', self)
+        paste_action.setShortcut('Ctrl+V')
+        paste_action.triggered.connect(self.paste)
+        edit_menu.addAction(paste_action)
+        
+        edit_menu.addSeparator()
+        
+        find_action = QAction('Find & Replace', self)
+        find_action.setShortcut('Ctrl+F')
+        find_action.triggered.connect(self.show_find_dialog)
+        edit_menu.addAction(find_action)
+        
+                # View menu
+        view_menu = menubar.addMenu('View')
+        
+        theme_submenu = view_menu.addMenu('Theme')
+        
+        dark_theme_action = QAction('Dark Theme', self)
+        dark_theme_action.triggered.connect(lambda: self.change_theme('Dark'))
+        theme_submenu.addAction(dark_theme_action)
+        
+        light_theme_action = QAction('Light Theme', self)
+        light_theme_action.triggered.connect(lambda: self.change_theme('Light'))
+        theme_submenu.addAction(light_theme_action)
+        
+        blue_theme_action = QAction('Blue Theme', self)
+        blue_theme_action.triggered.connect(lambda: self.change_theme('Blue'))
+        theme_submenu.addAction(blue_theme_action)
+        
+        # Help menu
+        help_menu = menubar.addMenu('Help')
+        
+        check_updates_action = QAction('Check for Updates', self)
+        check_updates_action.triggered.connect(self.check_for_updates_manual)
+        help_menu.addAction(check_updates_action)
+        
+        help_menu.addSeparator()
+        
+        github_action = QAction('Visit GitHub', self)
+        github_action.triggered.connect(self.open_github)
+        help_menu.addAction(github_action)
+        
+        about_action = QAction('About', self)
+        about_action.triggered.connect(self.show_about)
+        help_menu.addAction(about_action)
     
     def create_status_bar(self):
-        """Create application status bar"""
-        self.status_frame = tk.Frame(self.root, bg=self.theme.get_colors()['sidebar_bg'], height=30)
-        self.status_frame.pack(fill='x', side='bottom')
-        self.status_frame.pack_propagate(False)
+        """Create status bar"""
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
         
-        # Status message
-        self.status_label = tk.Label(
-            self.status_frame,
-            text="Ready",
-            font=("Segoe UI", 9),
-            bg=self.theme.get_colors()['sidebar_bg'],
-            fg=self.theme.get_colors()['fg'],
-            anchor='w'
-        )
-        self.status_label.pack(side='left', padx=10, pady=5)
+        self.status_label = QLabel("Ready")
+        self.status_bar.addWidget(self.status_label)
         
-        # File info
-        self.file_label = tk.Label(
-            self.status_frame,
-            text="No file loaded",
-            font=("Segoe UI", 9),
-            bg=self.theme.get_colors()['sidebar_bg'],
-            fg=self.theme.get_colors()['primary']
-        )
-        self.file_label.pack(side='left', padx=20, pady=5)
+        # Version label on right
+        version_label = QLabel(f"v{CURRENT_VERSION}")
+        version_label.setObjectName("versionLabel")
+        self.status_bar.addPermanentWidget(version_label)
         
-        # Cursor position
-        self.cursor_label = tk.Label(
-            self.status_frame,
-            text="Ln 1, Col 1",
-            font=("Segoe UI", 9),
-            bg=self.theme.get_colors()['sidebar_bg'],
-            fg=self.theme.get_colors()['fg']
-        )
-        self.cursor_label.pack(side='right', padx=10, pady=5)
+        # Document stats timer
+        self.stats_timer = QTimer()
+        self.stats_timer.timeout.connect(self.update_document_stats)
+        self.stats_timer.start(2000)  # Update every 2 seconds
+    
+    def setup_connections(self):
+        """Setup signal connections"""
+        pass  # Additional connections can be added here
+    
+    def load_config(self):
+        """Load application configuration"""
+        default_config = {
+            'theme': 'Dark',
+            'auto_save': True,
+            'font_family': 'Consolas',
+            'font_size': 11,
+            'recent_files': [],
+            'window_geometry': [100, 100, 1200, 800],
+            'check_updates_on_startup': True,
+            'last_update_check': ''
+        }
         
-        # Update cursor position
-        self.update_cursor_position()
+        try:
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, 'r') as f:
+                    config = json.load(f)
+                    # Merge with defaults
+                    for key, value in default_config.items():
+                        if key not in config:
+                            config[key] = value
+                    return config
+        except Exception as e:
+            print(f"Could not load config: {e}")
+        
+        return default_config
+    
+    def save_config(self):
+        """Save application configuration"""
+        try:
+            # Save window geometry
+            geometry = self.geometry()
+            self.config['window_geometry'] = [geometry.x(), geometry.y(), geometry.width(), geometry.height()]
+            
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(self.config, f, indent=2)
+        except Exception as e:
+            print(f"Could not save config: {e}")
     
     # File operations
     def new_file(self):
         """Create new file"""
-        if self.file_manager.new_file():
-            self.text_editor.clear_text()
-            self.update_title()
-            self.set_status("New file created")
-            logger.info("New file created")
+        if self.unsaved_changes:
+            reply = QMessageBox.question(self, 'Unsaved Changes', 
+                                       'You have unsaved changes. Continue?',
+                                       QMessageBox.Yes | QMessageBox.No)
+            if reply == QMessageBox.No:
+                return
+        
+        self.text_editor.clear()
+        self.current_file = None
+        self.unsaved_changes = False
+        self.status_label.setText("New file created")
+        self.setWindowTitle(f"{APP_NAME} v{CURRENT_VERSION} - Untitled")
     
     def open_file(self):
         """Open file"""
-        content = self.file_manager.open_file()
-        if content is not None:
-            self.text_editor.set_text(content)
-            self.update_title()
-            self.set_status(f"Opened: {os.path.basename(self.file_manager.current_file)}")
-            self.update_recent_files_list()
-            self.update_recent_menu()
+        if self.unsaved_changes:
+            reply = QMessageBox.question(self, 'Unsaved Changes', 
+                                       'You have unsaved changes. Continue?',
+                                       QMessageBox.Yes | QMessageBox.No)
+            if reply == QMessageBox.No:
+                return
+        
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, 
+            "Open File",
+            "",
+            "Text files (*.txt);;Python files (*.py);;All files (*.*)"
+        )
+        
+        if file_path:
+            self.load_file(file_path)
+    
+    def load_file(self, file_path):
+        """Load file content"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            self.text_editor.setPlainText(content)
+            self.current_file = file_path
+            self.unsaved_changes = False
+            self.add_to_recent_files(file_path)
+            self.status_label.setText(f"Opened: {os.path.basename(file_path)}")
+            self.setWindowTitle(f"{APP_NAME} v{CURRENT_VERSION} - {os.path.basename(file_path)}")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not open file:\n{str(e)}")
     
     def save_file(self):
-        """Save current file"""
-        content = self.text_editor.get_text()
-        if self.file_manager.save_file(content):
-            self.update_title()
-            self.set_status(f"Saved: {os.path.basename(self.file_manager.current_file)}")
-            return True
-        return False
+        """Save file"""
+        if not self.current_file:
+            self.save_file_as()
+        else:
+            try:
+                content = self.text_editor.toPlainText()
+                
+                # Create backup
+                if os.path.exists(self.current_file):
+                    backup_path = self.current_file + '.backup'
+                    import shutil
+                    shutil.copy2(self.current_file, backup_path)
+                
+                with open(self.current_file, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                
+                self.unsaved_changes = False
+                self.status_label.setText(f"Saved: {os.path.basename(self.current_file)}")
+                self.setWindowTitle(f"{APP_NAME} v{CURRENT_VERSION} - {os.path.basename(self.current_file)}")
+                
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Could not save file:\n{str(e)}")
     
     def save_file_as(self):
-        """Save file with new name"""
-        content = self.text_editor.get_text()
-        if self.file_manager.save_file_as(content):
-            self.update_title()
-            self.set_status(f"Saved as: {os.path.basename(self.file_manager.current_file)}")
-            self.update_recent_files_list()
-            self.update_recent_menu()
-            return True
-        return False
-    
-    def save_current_file_content(self):
-        """Save current file content (for file manager)"""
-        return self.save_file()
-    
-    def export_to_pdf(self):
-        """Export text to PDF"""
-        if not HAS_PDF_EXPORT:
-            messagebox.showerror("Error", "PDF export not available. Install ReportLab: pip install reportlab")
-            return
-        
-        content = self.text_editor.get_text().strip()
-        if not content:
-            messagebox.showwarning("Warning", "No content to export")
-            return
-        
-        file_path = filedialog.asksaveasfilename(
-            title="Export to PDF",
-            defaultextension=".pdf",
-            filetypes=[("PDF files", "*.pdf")]
+        """Save file as"""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save File As",
+            "",
+            "Text files (*.txt);;Python files (*.py);;All files (*.*)"
         )
         
         if file_path:
             try:
-                c = canvas.Canvas(file_path, pagesize=letter)
-                width, height = letter
+                content = self.text_editor.toPlainText()
                 
-                # Set up text
-                text_object = c.beginText(inch, height - inch)
-                text_object.setFont("Courier", 10)
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(content)
                 
-                # Add content line by line
-                lines = content.split('\n')
-                line_height = 12
-                current_y = height - inch
-                
-                for line in lines:
-                    if current_y < inch:  # Start new page
-                        c.drawText(text_object)
-                        c.showPage()
-                        text_object = c.beginText(inch, height - inch)
-                        text_object.setFont("Courier", 10)
-                        current_y = height - inch
-                    
-                    text_object.textLine(line)
-                    current_y -= line_height
-                
-                c.drawText(text_object)
-                c.save()
-                
-                self.set_status(f"Exported to PDF: {os.path.basename(file_path)}")
-                messagebox.showinfo("Success", f"File exported to:\n{file_path}")
+                self.current_file = file_path
+                self.unsaved_changes = False
+                self.add_to_recent_files(file_path)
+                self.status_label.setText(f"Saved as: {os.path.basename(file_path)}")
+                self.setWindowTitle(f"{APP_NAME} v{CURRENT_VERSION} - {os.path.basename(file_path)}")
                 
             except Exception as e:
-                messagebox.showerror("Error", f"Could not export to PDF:\n{str(e)}")
-                logger.error(f"PDF export error: {e}")
+                QMessageBox.critical(self, "Error", f"Could not save file:\n{str(e)}")
     
     # Edit operations
     def undo(self):
         """Undo last action"""
-        if hasattr(self.text_editor, 'undo'):
-            self.text_editor.undo()
+        self.text_editor.undo()
     
     def redo(self):
         """Redo last undone action"""
-        if hasattr(self.text_editor, 'redo'):
-            self.text_editor.redo()
+        self.text_editor.redo()
     
     def cut(self):
         """Cut selected text"""
-        if hasattr(self.text_editor, 'cut'):
-            self.text_editor.cut()
+        self.text_editor.cut()
     
     def copy(self):
         """Copy selected text"""
-        if hasattr(self.text_editor, 'copy'):
-            self.text_editor.copy()
+        self.text_editor.copy()
     
     def paste(self):
         """Paste text from clipboard"""
-        if hasattr(self.text_editor, 'paste'):
-            self.text_editor.paste()
+        self.text_editor.paste()
     
-    def select_all(self):
-        """Select all text"""
-        if hasattr(self.text_editor, 'select_all'):
-            self.text_editor.select_all()
-    
-    def show_find_replace(self):
+    def show_find_dialog(self):
         """Show find and replace dialog"""
-        if hasattr(self.text_editor, 'show_find_replace'):
-            self.text_editor.show_find_replace()
-    
-    # View operations
-    def toggle_line_numbers(self):
-        """Toggle line numbers visibility"""
-        if hasattr(self.text_editor, 'toggle_line_numbers'):
-            self.text_editor.toggle_line_numbers()
-    
-    def toggle_fullscreen(self):
-        """Toggle fullscreen mode"""
-        current_state = self.root.attributes('-fullscreen')
-        self.root.attributes('-fullscreen', not current_state)
-    
-    def zoom_in(self):
-        """Increase font size"""
-        if hasattr(self.text_editor, 'zoom_in'):
-            self.text_editor.zoom_in()
-    
-    def zoom_out(self):
-        """Decrease font size"""
-        if hasattr(self.text_editor, 'zoom_out'):
-            self.text_editor.zoom_out()
-    
-    def reset_zoom(self):
-        """Reset zoom to default"""
-        if hasattr(self.text_editor, 'zoom_level'):
-            self.text_editor.zoom_level = 100
-            self.text_editor.apply_zoom()
-    
-    def switch_theme(self, theme_name):
-        """Switch application theme"""
-        self.theme.switch_theme(theme_name)
-        self.config.set('theme', theme_name)
-        self.config.save_config()
-        
-        # Apply theme to all components
-        self.apply_theme()
-        
-        messagebox.showinfo("Theme Changed", f"Theme changed to {theme_name.title()}.\nSome changes may require restart for full effect.")
-    
-    def apply_theme(self):
-        """Apply current theme to all UI elements"""
-        colors = self.theme.get_colors()
-        
-        # Update root window
-        self.root.configure(bg=colors['bg'])
-        
-        # Update status bar
-        if hasattr(self, 'status_frame'):
-            self.status_frame.configure(bg=colors['sidebar_bg'])
-            self.status_label.configure(bg=colors['sidebar_bg'], fg=colors['fg'])
-            if hasattr(self, 'file_label'):
-                self.file_label.configure(bg=colors['sidebar_bg'], fg=colors['primary'])
-            if hasattr(self, 'cursor_label'):
-                self.cursor_label.configure(bg=colors['sidebar_bg'], fg=colors['fg'])
-        
-        # Update sidebar
-        if hasattr(self, 'sidebar'):
-            self.sidebar.configure(bg=colors['sidebar_bg'])
-        
-        # Refresh editor and PDF viewer themes
-        if hasattr(self, 'text_editor'):
-            self.text_editor.theme = self.theme
-        if hasattr(self, 'pdf_viewer'):
-            self.pdf_viewer.theme = self.theme
+        # Simple find dialog implementation
+        text, ok = QFileDialog.getOpenFileName(self, 'Find Text', '')
+        if ok and text:
+            cursor = self.text_editor.textCursor()
+            found = self.text_editor.find(text)
+            if not found:
+                QMessageBox.information(self, "Find", "Text not found")
     
     def show_word_count(self):
         """Show word count dialog"""
-        content = self.text_editor.get_text().strip()
+        content = self.text_editor.toPlainText()
         
         # Calculate statistics
         lines = len(content.split('\n')) if content else 0
         words = len(content.split()) if content else 0
         chars = len(content)
         chars_no_spaces = len(content.replace(' ', '').replace('\n', '').replace('\t', ''))
-        paragraphs = len([p for p in content.split('\n\n') if p.strip()]) if content else 0
-        
-        # Show selected text stats if any
-        try:
-            selected = self.text_editor.text_editor.get(tk.SEL_FIRST, tk.SEL_LAST)
-            selected_words = len(selected.split()) if selected else 0
-            selected_chars = len(selected) if selected else 0
-        except tk.TclError:
-            selected_words = 0
-            selected_chars = 0
         
         stats_text = f"""Document Statistics:
 
-Total:
-• Lines: {lines:,}
-• Words: {words:,}
-• Characters: {chars:,}
-• Characters (no spaces): {chars_no_spaces:,}
-• Paragraphs: {paragraphs:,}
+Lines: {lines:,}
+Words: {words:,}
+Characters: {chars:,}
+Characters (no spaces): {chars_no_spaces:,}
+
+Paragraphs: {len([p for p in content.split('\n\n') if p.strip()]) if content else 0}
 """
         
-        if selected_words > 0:
-            stats_text += f"""
-Selected:
-• Words: {selected_words:,}
-• Characters: {selected_chars:,}"""
-        
-        messagebox.showinfo("Document Statistics", stats_text)
+        QMessageBox.information(self, "Document Statistics", stats_text)
     
     # Recent files management
-    def update_recent_menu(self):
-        """Update recent files menu"""
-        if not hasattr(self, 'recent_menu'):
-            return
-        
-        # Clear existing items
-        self.recent_menu.delete(0, 'end')
-        
-        recent_files = self.file_manager.get_recent_files()
-        if not recent_files:
-            self.recent_menu.add_command(label="No recent files", state='disabled')
-        else:
-            for file_path in recent_files:
-                filename = os.path.basename(file_path)
-                self.recent_menu.add_command(
-                    label=filename,
-                    command=lambda fp=file_path: self.open_recent_file(fp)
-                )
-    
-    def update_recent_files_list(self):
-        """Update recent files listbox"""
-        if not hasattr(self, 'recent_listbox'):
-            return
-        
-        self.recent_listbox.delete(0, tk.END)
-        recent_files = self.file_manager.get_recent_files()
-        
-        for file_path in recent_files:
-            filename = os.path.basename(file_path)
-            self.recent_listbox.insert(tk.END, filename)
-    
-    def open_recent_file(self, file_path):
-        """Open recent file"""
-        content = self.file_manager.open_file(file_path)
-        if content is not None:
-            self.text_editor.set_text(content)
-            self.update_title()
-            self.set_status(f"Opened: {os.path.basename(file_path)}")
-    
-    def open_recent_from_list(self, event):
-        """Open recent file from listbox"""
-        selection = self.recent_listbox.curselection()
-        if selection:
-            index = selection[0]
-            recent_files = self.file_manager.get_recent_files()
-            if index < len(recent_files):
-                self.open_recent_file(recent_files[index])
-    
-    # UI updates and status
-    def update_title(self):
-        """Update window title"""
-        if self.file_manager.current_file:
-            filename = os.path.basename(self.file_manager.current_file)
-            modified = " *" if self.file_manager.unsaved_changes else ""
-            title = f"{APP_NAME} v{CURRENT_VERSION} - {filename}{modified}"
-            self.file_label.config(text=filename + modified)
-        else:
-            modified = " *" if self.file_manager.unsaved_changes else ""
-            title = f"{APP_NAME} v{CURRENT_VERSION} - Untitled{modified}"
-            self.file_label.config(text="Untitled" + modified)
-        
-        self.root.title(title)
-    
-    def set_status(self, message):
-        """Update status bar message"""
-        self.status_label.config(text=message)
-        self.root.update_idletasks()
-        
-        # Clear status after 5 seconds
-        self.root.after(5000, lambda: self.status_label.config(text="Ready"))
-    
-    def update_document_stats(self):
-        """Update document statistics in sidebar"""
-        if hasattr(self, 'stats_labels') and hasattr(self, 'text_editor'):
-            try:
-                content = self.text_editor.get_text()
-                lines = len(content.split('\n')) if content else 0
-                words = len(content.split()) if content else 0
-                chars = len(content)
-                
-                                # Get selected text info
-                try:
-                    selected = self.text_editor.text_editor.get(tk.SEL_FIRST, tk.SEL_LAST)
-                    selected_count = len(selected.split()) if selected else 0
-                except tk.TclError:
-                    selected_count = 0
-                
-                # Update labels
-                self.stats_labels['lines'].config(text=f"Lines: {lines:,}")
-                self.stats_labels['words'].config(text=f"Words: {words:,}")
-                self.stats_labels['chars'].config(text=f"Characters: {chars:,}")
-                self.stats_labels['selected'].config(text=f"Selected: {selected_count} words")
-                
-            except Exception as e:
-                logger.error(f"Error updating document stats: {e}")
-        
-        # Schedule next update
-        self.root.after(2000, self.update_document_stats)
-    
-    def update_cursor_position(self):
-        """Update cursor position in status bar"""
-        if hasattr(self, 'text_editor') and hasattr(self, 'cursor_label'):
-            try:
-                cursor_pos = self.text_editor.text_editor.index(tk.INSERT)
-                line, col = cursor_pos.split('.')
-                self.cursor_label.config(text=f"Ln {line}, Col {int(col) + 1}")
-            except:
-                pass
-        
-        # Schedule next update
-        self.root.after(100, self.update_cursor_position)
-    
-    def on_text_change(self):
-        """Handle text editor changes"""
-        self.file_manager.set_unsaved_changes(True)
-        self.update_title()
-        
-        # Restart auto-save timer
-        if self.config.get('auto_save', True):
-            self.restart_auto_save_timer()
-    
-    # Auto-save functionality
-    def start_auto_save_timer(self):
-        """Start auto-save timer"""
-        if self.config.get('auto_save', True):
-            interval = self.config.get('auto_save_interval', 30) * 1000
-            self.auto_save_timer = self.root.after(interval, self.auto_save)
-    
-    def restart_auto_save_timer(self):
-        """Restart auto-save timer"""
-        if self.auto_save_timer:
-            self.root.after_cancel(self.auto_save_timer)
-        self.start_auto_save_timer()
-    
-    def auto_save(self):
-        """Perform auto-save"""
-        if (self.file_manager.unsaved_changes and 
-            self.file_manager.current_file and 
-            self.config.get('auto_save', True)):
-            
-            content = self.text_editor.get_text()
-            if self.file_manager.save_file(content, self.file_manager.current_file):
-                self.update_title()
-                self.set_status(f"Auto-saved: {os.path.basename(self.file_manager.current_file)}")
-        
-        # Schedule next auto-save
-        self.start_auto_save_timer()
-    
-    # Settings and configuration
-    def show_settings(self):
-        """Show settings dialog"""
-        settings_window = tk.Toplevel(self.root)
-        settings_window.title("Settings")
-        settings_window.geometry("600x700")
-        settings_window.resizable(False, False)
-        settings_window.configure(bg=self.theme.get_colors()['bg'])
-        settings_window.transient(self.root)
-        settings_window.grab_set()
-        
-        # Center the window
-        settings_window.update_idletasks()
-        x = (settings_window.winfo_screenwidth() // 2) - (600 // 2)
-        y = (settings_window.winfo_screenheight() // 2) - (700 // 2)
-        settings_window.geometry(f"600x700+{x}+{y}")
-        
-        # Create notebook for settings categories
-        settings_notebook = ttk.Notebook(settings_window)
-        settings_notebook.pack(fill='both', expand=True, padx=20, pady=20)
-        
-        # General settings
-        self.create_general_settings(settings_notebook)
-        
-        # Editor settings
-        self.create_editor_settings(settings_notebook)
-        
-        # Theme settings
-        self.create_theme_settings(settings_notebook)
-        
-        # Advanced settings
-        self.create_advanced_settings(settings_notebook)
-    
-    def create_general_settings(self, parent):
-        """Create general settings tab"""
-        general_frame = tk.Frame(parent, bg=self.theme.get_colors()['bg'])
-        parent.add(general_frame, text="General")
-        
-        # User information
-        user_frame = tk.LabelFrame(
-            general_frame,
-            text="User Information",
-            font=("Segoe UI", 11, "bold"),
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg'],
-            padx=15,
-            pady=15
-        )
-        user_frame.pack(fill='x', padx=20, pady=10)
-        
-        # Name
-        tk.Label(user_frame, text="Name:", bg=self.theme.get_colors()['bg'], fg=self.theme.get_colors()['fg']).grid(row=0, column=0, sticky='w', pady=5)
-        self.name_var = tk.StringVar(value=self.config.get('user_name', ''))
-        tk.Entry(user_frame, textvariable=self.name_var, width=30).grid(row=0, column=1, padx=(10, 0), pady=5)
-        
-        # Email
-        tk.Label(user_frame, text="Email:", bg=self.theme.get_colors()['bg'], fg=self.theme.get_colors()['fg']).grid(row=1, column=0, sticky='w', pady=5)
-        self.email_var = tk.StringVar(value=self.config.get('user_email', ''))
-        tk.Entry(user_frame, textvariable=self.email_var, width=30).grid(row=1, column=1, padx=(10, 0), pady=5)
-        
-        # Auto-save settings
-        save_frame = tk.LabelFrame(
-            general_frame,
-            text="Auto-Save Settings",
-            font=("Segoe UI", 11, "bold"),
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg'],
-            padx=15,
-            pady=15
-        )
-        save_frame.pack(fill='x', padx=20, pady=10)
-        
-        self.auto_save_var = tk.BooleanVar(value=self.config.get('auto_save', True))
-        tk.Checkbutton(
-            save_frame,
-            text="Enable auto-save",
-            variable=self.auto_save_var,
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg'],
-            activebackground=self.theme.get_colors()['bg']
-        ).pack(anchor='w', pady=5)
-        
-        interval_frame = tk.Frame(save_frame, bg=self.theme.get_colors()['bg'])
-        interval_frame.pack(fill='x', pady=5)
-        
-        tk.Label(interval_frame, text="Auto-save interval (seconds):", bg=self.theme.get_colors()['bg'], fg=self.theme.get_colors()['fg']).pack(side='left')
-        self.auto_save_interval_var = tk.IntVar(value=self.config.get('auto_save_interval', 30))
-        tk.Spinbox(interval_frame, from_=10, to=300, textvariable=self.auto_save_interval_var, width=10).pack(side='left', padx=(10, 0))
-        
-        # Backup settings
-        self.create_backups_var = tk.BooleanVar(value=self.config.get('create_backups', True))
-        tk.Checkbutton(
-            save_frame,
-            text="Create backup files",
-            variable=self.create_backups_var,
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg'],
-            activebackground=self.theme.get_colors()['bg']
-        ).pack(anchor='w', pady=5)
-        
-        # Update settings
-        update_frame = tk.LabelFrame(
-            general_frame,
-            text="Update Settings",
-            font=("Segoe UI", 11, "bold"),
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg'],
-            padx=15,
-            pady=15
-        )
-        update_frame.pack(fill='x', padx=20, pady=10)
-        
-        self.check_updates_var = tk.BooleanVar(value=self.config.get('check_updates_on_startup', True))
-        tk.Checkbutton(
-            update_frame,
-            text="Check for updates on startup",
-            variable=self.check_updates_var,
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg'],
-            activebackground=self.theme.get_colors()['bg']
-        ).pack(anchor='w', pady=5)
-        
-        # Save button
-        save_btn = tk.Button(
-            general_frame,
-            text="💾 Save Settings",
-            command=self.save_general_settings,
-            bg=self.theme.get_colors()['success'],
-            fg='white',
-            font=("Segoe UI", 11, "bold"),
-            padx=20,
-            pady=10,
-            relief='flat'
-        )
-        save_btn.pack(pady=20)
-    
-    def create_editor_settings(self, parent):
-        """Create editor settings tab"""
-        editor_frame = tk.Frame(parent, bg=self.theme.get_colors()['bg'])
-        parent.add(editor_frame, text="Editor")
-        
-        # Font settings
-        font_frame = tk.LabelFrame(
-            editor_frame,
-            text="Font Settings",
-            font=("Segoe UI", 11, "bold"),
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg'],
-            padx=15,
-            pady=15
-        )
-        font_frame.pack(fill='x', padx=20, pady=10)
-        
-        # Font family
-        font_family_frame = tk.Frame(font_frame, bg=self.theme.get_colors()['bg'])
-        font_family_frame.pack(fill='x', pady=5)
-        
-        tk.Label(font_family_frame, text="Font Family:", bg=self.theme.get_colors()['bg'], fg=self.theme.get_colors()['fg']).pack(side='left')
-        self.font_family_var = tk.StringVar(value=self.config.get('editor_font_family', 'Consolas'))
-        font_combo = ttk.Combobox(font_family_frame, textvariable=self.font_family_var, 
-                                 values=['Consolas', 'Courier New', 'Monaco', 'Source Code Pro', 'Fira Code', 'JetBrains Mono'])
-        font_combo.pack(side='left', padx=(10, 0))
-        
-        # Font size
-        font_size_frame = tk.Frame(font_frame, bg=self.theme.get_colors()['bg'])
-        font_size_frame.pack(fill='x', pady=5)
-        
-        tk.Label(font_size_frame, text="Font Size:", bg=self.theme.get_colors()['bg'], fg=self.theme.get_colors()['fg']).pack(side='left')
-        self.font_size_var = tk.IntVar(value=self.config.get('editor_font_size', 11))
-        tk.Spinbox(font_size_frame, from_=8, to=72, textvariable=self.font_size_var, width=10).pack(side='left', padx=(10, 0))
-        
-        # Editor behavior
-        behavior_frame = tk.LabelFrame(
-            editor_frame,
-            text="Editor Behavior",
-            font=("Segoe UI", 11, "bold"),
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg'],
-            padx=15,
-            pady=15
-        )
-        behavior_frame.pack(fill='x', padx=20, pady=10)
-        
-        self.show_line_numbers_var = tk.BooleanVar(value=self.config.get('show_line_numbers', True))
-        tk.Checkbutton(
-            behavior_frame,
-            text="Show line numbers",
-            variable=self.show_line_numbers_var,
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg'],
-            activebackground=self.theme.get_colors()['bg']
-        ).pack(anchor='w', pady=2)
-        
-        self.word_wrap_var = tk.BooleanVar(value=self.config.get('editor_word_wrap', False))
-        tk.Checkbutton(
-            behavior_frame,
-            text="Word wrap",
-            variable=self.word_wrap_var,
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg'],
-            activebackground=self.theme.get_colors()['bg']
-        ).pack(anchor='w', pady=2)
-        
-        self.syntax_highlighting_var = tk.BooleanVar(value=self.config.get('editor_syntax_highlighting', True))
-        tk.Checkbutton(
-            behavior_frame,
-            text="Syntax highlighting",
-            variable=self.syntax_highlighting_var,
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg'],
-            activebackground=self.theme.get_colors()['bg']
-        ).pack(anchor='w', pady=2)
-        
-        # Save button
-        save_btn = tk.Button(
-            editor_frame,
-            text="💾 Save Settings",
-            command=self.save_editor_settings,
-            bg=self.theme.get_colors()['success'],
-            fg='white',
-            font=("Segoe UI", 11, "bold"),
-            padx=20,
-            pady=10,
-            relief='flat'
-        )
-        save_btn.pack(pady=20)
-    
-    def create_theme_settings(self, parent):
-        """Create theme settings tab"""
-        theme_frame = tk.Frame(parent, bg=self.theme.get_colors()['bg'])
-        parent.add(theme_frame, text="Themes")
-        
-                # Theme selection
-        selection_frame = tk.LabelFrame(
-            theme_frame,
-            text="Select Theme",
-            font=("Segoe UI", 11, "bold"),
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg'],
-            padx=15,
-            pady=15
-        )
-        selection_frame.pack(fill='x', padx=20, pady=10)
-        
-        self.theme_var = tk.StringVar(value=self.config.get('theme', 'dark'))
-        
-        themes = [
-            ('dark', 'Dark Professional', 'Modern dark theme with blue accents'),
-            ('light', 'Light Professional', 'Clean light theme with subtle colors'),
-            ('high_contrast', 'High Contrast', 'High contrast theme for accessibility')
-        ]
-        
-        for theme_id, theme_name, description in themes:
-            theme_radio = tk.Radiobutton(
-                selection_frame,
-                text=theme_name,
-                variable=self.theme_var,
-                value=theme_id,
-                bg=self.theme.get_colors()['bg'],
-                fg=self.theme.get_colors()['fg'],
-                activebackground=self.theme.get_colors()['bg'],
-                selectcolor=self.theme.get_colors()['primary'],
-                font=("Segoe UI", 10, "bold")
-            )
-            theme_radio.pack(anchor='w', pady=5)
-            
-            tk.Label(
-                selection_frame,
-                text=f"  {description}",
-                bg=self.theme.get_colors()['bg'],
-                fg=self.theme.get_colors()['secondary'],
-                font=("Segoe UI", 9)
-            ).pack(anchor='w', padx=(20, 0))
-        
-        # Theme preview
-        preview_frame = tk.LabelFrame(
-            theme_frame,
-            text="Theme Preview",
-            font=("Segoe UI", 11, "bold"),
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg'],
-            padx=15,
-            pady=15
-        )
-        preview_frame.pack(fill='both', expand=True, padx=20, pady=10)
-        
-        # Preview area
-        self.preview_area = tk.Frame(preview_frame, height=200, bg=self.theme.get_colors()['editor_bg'])
-        self.preview_area.pack(fill='both', expand=True, pady=10)
-        self.preview_area.pack_propagate(False)
-        
-        # Sample text
-        tk.Label(
-            self.preview_area,
-            text="Sample Editor Text",
-            font=("Consolas", 12, "bold"),
-            bg=self.theme.get_colors()['editor_bg'],
-            fg=self.theme.get_colors()['editor_fg']
-        ).pack(pady=20)
-        
-        # Apply and save buttons
-        button_frame = tk.Frame(theme_frame, bg=self.theme.get_colors()['bg'])
-        button_frame.pack(fill='x', padx=20, pady=10)
-        
-        tk.Button(
-            button_frame,
-            text="🎨 Apply Theme",
-            command=self.apply_theme_selection,
-            bg=self.theme.get_colors()['primary'],
-            fg='white',
-            font=("Segoe UI", 11, "bold"),
-            padx=20,
-            pady=10,
-            relief='flat'
-        ).pack(side='left')
-        
-        tk.Button(
-            button_frame,
-            text="💾 Save Settings",
-            command=self.save_theme_settings,
-            bg=self.theme.get_colors()['success'],
-            fg='white',
-            font=("Segoe UI", 11, "bold"),
-            padx=20,
-            pady=10,
-            relief='flat'
-        ).pack(side='right')
-    
-    def create_advanced_settings(self, parent):
-        """Create advanced settings tab"""
-        advanced_frame = tk.Frame(parent, bg=self.theme.get_colors()['bg'])
-        parent.add(advanced_frame, text="Advanced")
-        
-        # Performance settings
-        perf_frame = tk.LabelFrame(
-            advanced_frame,
-            text="Performance",
-            font=("Segoe UI", 11, "bold"),
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg'],
-            padx=15,
-            pady=15
-        )
-        perf_frame.pack(fill='x', padx=20, pady=10)
-        
-        tk.Label(
-            perf_frame,
-            text="Maximum recent files:",
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg']
-        ).grid(row=0, column=0, sticky='w', pady=5)
-        
-        self.max_recent_var = tk.IntVar(value=self.config.get('max_recent_files', 10))
-        tk.Spinbox(
-            perf_frame,
-            from_=5,
-            to=50,
-            textvariable=self.max_recent_var,
-            width=10
-        ).grid(row=0, column=1, padx=(10, 0), pady=5)
-        
-        # File associations
-        assoc_frame = tk.LabelFrame(
-            advanced_frame,
-            text="File Associations",
-            font=("Segoe UI", 11, "bold"),
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg'],
-            padx=15,
-            pady=15
-        )
-        assoc_frame.pack(fill='x', padx=20, pady=10)
-        
-        tk.Label(
-            assoc_frame,
-            text="Associate common file types with this application:",
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg']
-        ).pack(anchor='w', pady=5)
-        
-        # Logging settings
-        log_frame = tk.LabelFrame(
-            advanced_frame,
-            text="Logging",
-            font=("Segoe UI", 11, "bold"),
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg'],
-            padx=15,
-            pady=15
-        )
-        log_frame.pack(fill='x', padx=20, pady=10)
-        
-        tk.Button(
-            log_frame,
-            text="📋 View Logs",
-            command=self.show_logs,
-            bg=self.theme.get_colors()['info'],
-            fg='white',
-            font=("Segoe UI", 10),
-            padx=15,
-            pady=5,
-            relief='flat'
-        ).pack(side='left', pady=5)
-        
-        tk.Button(
-            log_frame,
-            text="🗑️ Clear Logs",
-            command=self.clear_logs,
-            bg=self.theme.get_colors()['warning'],
-            fg='white',
-            font=("Segoe UI", 10),
-            padx=15,
-            pady=5,
-            relief='flat'
-        ).pack(side='left', padx=(10, 0), pady=5)
-        
-        # Reset settings
-        reset_frame = tk.LabelFrame(
-            advanced_frame,
-            text="Reset",
-            font=("Segoe UI", 11, "bold"),
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg'],
-            padx=15,
-            pady=15
-        )
-        reset_frame.pack(fill='x', padx=20, pady=10)
-        
-        tk.Button(
-            reset_frame,
-            text="🔄 Reset All Settings",
-            command=self.reset_all_settings,
-            bg=self.theme.get_colors()['danger'],
-            fg='white',
-            font=("Segoe UI", 10, "bold"),
-            padx=15,
-            pady=8,
-            relief='flat'
-        ).pack(pady=5)
-        
-        tk.Label(
-            reset_frame,
-            text="This will reset all settings to default values",
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['warning'],
-            font=("Segoe UI", 9)
-        ).pack()
-    
-    # Settings save methods
-    def save_general_settings(self):
-        """Save general settings"""
-        self.config.update({
-            'user_name': self.name_var.get(),
-            'user_email': self.email_var.get(),
-            'auto_save': self.auto_save_var.get(),
-            'auto_save_interval': self.auto_save_interval_var.get(),
-            'create_backups': self.create_backups_var.get(),
-            'check_updates_on_startup': self.check_updates_var.get()
-        })
-        self.config.save_config()
-        messagebox.showinfo("Settings", "General settings saved successfully!")
-    
-    def save_editor_settings(self):
-        """Save editor settings"""
-        self.config.update({
-            'editor_font_family': self.font_family_var.get(),
-            'editor_font_size': self.font_size_var.get(),
-            'show_line_numbers': self.show_line_numbers_var.get(),
-            'editor_word_wrap': self.word_wrap_var.get(),
-            'editor_syntax_highlighting': self.syntax_highlighting_var.get()
-        })
-        self.config.save_config()
-        
-        # Apply editor settings immediately
-        if hasattr(self, 'text_editor'):
-            self.text_editor.apply_settings(self.config.config)
-        
-        messagebox.showinfo("Settings", "Editor settings saved successfully!")
-    
-    def apply_theme_selection(self):
-        """Apply selected theme"""
-        theme_name = self.theme_var.get()
-        self.switch_theme(theme_name)
-    
-    def save_theme_settings(self):
-        """Save theme settings"""
-        theme_name = self.theme_var.get()
-        self.config.set('theme', theme_name)
-        self.config.save_config()
-        messagebox.showinfo("Settings", "Theme settings saved successfully!")
-    
-    def reset_all_settings(self):
-        """Reset all settings to defaults"""
-        if messagebox.askyesno("Reset Settings", "Are you sure you want to reset all settings to default values?"):
-            try:
-                # Remove config file
-                if os.path.exists(CONFIG_FILE):
-                    os.remove(CONFIG_FILE)
-                
-                # Reload default config
-                self.config = ConfigManager()
-                
-                # Apply default theme
-                self.theme.switch_theme('dark')
-                self.apply_theme()
-                
-                messagebox.showinfo("Settings", "All settings have been reset to defaults. Please restart the application.")
-                
-            except Exception as e:
-                messagebox.showerror("Error", f"Could not reset settings:\n{str(e)}")
-    
-    # Logging functionality
-    def show_logs(self):
-        """Show application logs"""
-        log_window = tk.Toplevel(self.root)
-        log_window.title("Application Logs")
-        log_window.geometry("800x600")
-        log_window.configure(bg=self.theme.get_colors()['bg'])
-        
-        # Log text area
-        log_text = scrolledtext.ScrolledText(
-            log_window,
-            wrap=tk.WORD,
-            font=("Consolas", 10),
-            bg=self.theme.get_colors()['editor_bg'],
-            fg=self.theme.get_colors()['editor_fg']
-        )
-        log_text.pack(fill='both', expand=True, padx=10, pady=10)
-        
-        # Load log content
-        try:
-            if os.path.exists(LOG_FILE):
-                with open(LOG_FILE, 'r', encoding='utf-8') as f:
-                    log_content = f.read()
-                log_text.insert(1.0, log_content)
-            else:
-                log_text.insert(1.0, "No log file found.")
-        except Exception as e:
-            log_text.insert(1.0, f"Error reading log file: {str(e)}")
-        
-        log_text.config(state='disabled')
-        
-        # Scroll to bottom
-        log_text.see(tk.END)
-    
-    def clear_logs(self):
-        """Clear application logs"""
-        if messagebox.askyesno("Clear Logs", "Are you sure you want to clear all logs?"):
-            try:
-                if os.path.exists(LOG_FILE):
-                    with open(LOG_FILE, 'w') as f:
-                        f.write("")
-                logger.info("Logs cleared by user")
-                messagebox.showinfo("Success", "Logs cleared successfully!")
-            except Exception as e:
-                messagebox.showerror("Error", f"Could not clear logs:\n{str(e)}")
-    
-    # Utility methods
-    def lighten_color(self, color):
-        """Lighten a hex color by 20%"""
-        try:
-            # Remove # if present
-            color = color.lstrip('#')
-            # Convert to RGB
-            r, g, b = tuple(int(color[i:i+2], 16) for i in (0, 2, 4))
-            # Lighten by 20%
-            r = min(255, int(r * 1.2))
-            g = min(255, int(g * 1.2))
-            b = min(255, int(b * 1.2))
-            # Convert back to hex
-            return f"#{r:02x}{g:02x}{b:02x}"
-        except:
-            return color
-    
-    def show_about(self):
-        """Show about dialog"""
-        about_window = tk.Toplevel(self.root)
-        about_window.title("About")
-        about_window.geometry("500x600")
-        about_window.resizable(False, False)
-        about_window.configure(bg=self.theme.get_colors()['bg'])
-        about_window.transient(self.root)
-        about_window.grab_set()
-        
-        # Center the window
-        about_window.update_idletasks()
-        x = (about_window.winfo_screenwidth() // 2) - (500 // 2)
-        y = (about_window.winfo_screenheight() // 2) - (600 // 2)
-        about_window.geometry(f"500x600+{x}+{y}")
-        
-        # App icon and title
-        header_frame = tk.Frame(about_window, bg=self.theme.get_colors()['primary'], height=120)
-        header_frame.pack(fill='x')
-        header_frame.pack_propagate(False)
-        
-        tk.Label(
-            header_frame,
-            text="🚀",
-            font=("Segoe UI", 40),
-            bg=self.theme.get_colors()['primary'],
-            fg='white'
-        ).pack(pady=20)
-        
-        tk.Label(
-            header_frame,
-            text=APP_NAME,
-            font=("Segoe UI", 18, "bold"),
-            bg=self.theme.get_colors()['primary'],
-            fg='white'
-        ).pack()
-        
-        # App information
-        info_frame = tk.Frame(about_window, bg=self.theme.get_colors()['bg'])
-        info_frame.pack(fill='both', expand=True, padx=30, pady=20)
-        
-        tk.Label(
-            info_frame,
-            text=f"Version {CURRENT_VERSION}",
-            font=("Segoe UI", 14, "bold"),
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['primary']
-        ).pack(pady=(0, 20))
-        
-        about_text = """A modern, feature-rich text editor and PDF viewer built with Python and Tkinter.
-
-🌟 Key Features:
-• Advanced text editing with syntax highlighting
-• PDF viewing and navigation capabilities
-• Professional themes (Dark, Light, High Contrast)
-• Auto-save with backup functionality
-• Automatic update checking
-• Customizable interface and settings
-• Document statistics and word count
-• Find & replace with advanced search
-• Recent files management
-• Export to PDF functionality
-
-🛠️ Built With:
-• Python 3.x
-• Tkinter (GUI Framework)
-• PyMuPDF (PDF Support)
-• ReportLab (PDF Export)
-• Requests (Updates)
-
-📝 License:
-Open Source Software
-
-© 2025 PixelHeaven
-All rights reserved."""
-        
-        tk.Label(
-            info_frame,
-            text=about_text,
-            font=("Segoe UI", 10),
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg'],
-            justify='left',
-            wraplength=440
-        ).pack()
-        
-        # Buttons
-        button_frame = tk.Frame(info_frame, bg=self.theme.get_colors()['bg'])
-        button_frame.pack(fill='x', pady=20)
-        
-        tk.Button(
-            button_frame,
-            text="🌐 Visit GitHub",
-            command=self.open_github,
-            bg=self.theme.get_colors()['primary'],
-            fg='white',
-            font=("Segoe UI", 10, "bold"),
-            padx=20,
-            pady=8,
-            relief='flat'
-        ).pack(side='left')
-        
-        tk.Button(
-            button_frame,
-            text="🔄 Check Updates",
-            command=lambda: self.update_manager.check_for_updates(),
-            bg=self.theme.get_colors()['info'],
-            fg='white',
-            font=("Segoe UI", 10, "bold"),
-            padx=20,
-            pady=8,
-            relief='flat'
-        ).pack(side='left', padx=(10, 0))
-        
-        tk.Button(
-            button_frame,
-            text="Close",
-            command=about_window.destroy,
-            bg=self.theme.get_colors()['secondary'],
-            fg='white',
-            font=("Segoe UI", 10),
-            padx=20,
-            pady=8,
-            relief='flat'
-        ).pack(side='right')
-    
-    def open_github(self):
-        """Open GitHub repository"""
-        github_url = "https://github.com/PixelHeaven/software1"
-        webbrowser.open(github_url)
-    
-    def on_closing(self):
-        """Handle application closing"""
-        if self.file_manager.ask_save_changes():
-            # Save configuration
-            self.config.save_config()
-            
-            # Cancel auto-save timer
-            if self.auto_save_timer:
-                self.root.after_cancel(self.auto_save_timer)
-            
-            logger.info("Application closing")
-            self.root.quit()
-    
-    def run(self):
-        """Start the application"""
-        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-        
-        # Connect text editor change callback
-        if hasattr(self, 'text_editor'):
-            self.text_editor.set_change_callback(self.on_text_change)
-        
-        # Restore window geometry
-        try:
-            geometry = self.config.get('window_geometry', '1200x800')
-            self.root.geometry(geometry)
-            
-            window_state = self.config.get('window_state', 'normal')
-            if window_state == 'zoomed':
-                self.root.state('zoomed')
-        except:
-            # Center window on screen
-            self.root.update_idletasks()
-            width = self.root.winfo_width()
-            height = self.root.winfo_height()
-            x = (self.root.winfo_screenwidth() // 2) - (width // 2)
-            y = (self.root.winfo_screenheight() // 2) - (height // 2)
-            self.root.geometry(f"{width}x{height}+{x}+{y}")
-        
-        logger.info(f"Application started - Version {CURRENT_VERSION}")
-        self.root.mainloop()
-
-# Enhanced AdvancedTextEditor class with additional methods
-class AdvancedTextEditor:
-    """Advanced text editor with syntax highlighting and modern features"""
-    
-    def __init__(self, parent, theme_manager):
-        self.parent = parent
-        self.theme = theme_manager
-        self.change_callback = None
-        self.search_window = None
-        self.zoom_level = 100
-        
-        # Create the editor interface
-        self.create_editor()
-        
-        # Initialize syntax highlighting
-        self.setup_syntax_highlighting()
-        
-        logger.info("AdvancedTextEditor created")
-    
-    def create_editor(self):
-        """Create the editor interface"""
-        self.editor_frame = tk.Frame(self.parent, bg=self.theme.get_colors()['bg'])
-        
-        # Toolbar
-        self.create_toolbar()
-        
-        # Editor area
-        editor_container = tk.Frame(self.editor_frame, bg=self.theme.get_colors()['bg'])
-        editor_container.pack(fill='both', expand=True, padx=10, pady=(0, 10))
-        
-        # Line numbers
-        self.line_numbers = tk.Text(
-            editor_container,
-            width=4,
-            padx=5,
-            pady=5,
-            takefocus=0,
-            border=0,
-            state='disabled',
-            wrap='none',
-            font=('Consolas', 11),
-            bg=self.theme.get_colors()['sidebar_bg'],
-            fg=self.theme.get_colors()['fg']
-        )
-        self.line_numbers.pack(side='left', fill='y')
-        
-        # Main text editor
-        self.text_editor = tk.Text(
-            editor_container,
-            wrap='none',
-            font=('Consolas', 11),
-            bg=self.theme.get_colors()['editor_bg'],
-            fg=self.theme.get_colors()['editor_fg'],
-            insertbackground=self.theme.get_colors()['primary'],
-            selectbackground=self.theme.get_colors()['primary'],
-            selectforeground='white',
-            undo=True,
-            maxundo=100,
-            tabs=('1c', '2c', '3c', '4c', '5c', '6c', '7c', '8c')
-        )
-        
-        # Scrollbars
-        v_scrollbar = tk.Scrollbar(editor_container, orient='vertical', command=self.sync_scroll)
-        h_scrollbar = tk.Scrollbar(editor_container, orient='horizontal', command=self.text_editor.xview)
-        
-        self.text_editor.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
-        
-        # Pack scrollbars and editor
-        v_scrollbar.pack(side='right', fill='y')
-        h_scrollbar.pack(side='bottom', fill='x')
-        self.text_editor.pack(fill='both', expand=True)
-        
-        # Bind events
-        self.text_editor.bind('<KeyRelease>', self.on_text_change)
-        self.text_editor.bind('<Button-1>', self.on_text_change)
-        self.text_editor.bind('<MouseWheel>', self.on_mousewheel)
-        self.text_editor.bind('<Control-MouseWheel>', self.on_ctrl_mousewheel)
-        
-        # Context menu
-        self.create_context_menu()
-        
-        # Update line numbers initially
-        self.update_line_numbers()
-    
-    def create_toolbar(self):
-        """Create editor toolbar"""
-        toolbar = tk.Frame(self.editor_frame, bg=self.theme.get_colors()['sidebar_bg'], height=40)
-        toolbar.pack(fill='x', padx=10, pady=(10, 0))
-        toolbar.pack_propagate(False)
-        
-        # File operations
-        file_buttons = [
-            ("📄", "New file", None),
-            ("📂", "Open file", None),
-            ("💾", "Save file", None),
-            ("📋", "Export PDF", None)
-        ]
-        
-        for icon, tooltip, command in file_buttons:
-            btn = tk.Button(
-                toolbar,
-                text=icon,
-                font=("Segoe UI", 12),
-                bg=self.theme.get_colors()['sidebar_bg'],
-                fg=self.theme.get_colors()['fg'],
-                relief='flat',
-                padx=8,
-                pady=5,
-                cursor='hand2'
-            )
-            btn.pack(side='left', padx=2)
-        
-        # Separator
-        tk.Frame(toolbar, bg=self.theme.get_colors()['fg'], width=1).pack(side='left', fill='y', padx=5, pady=5)
-        
-        # Edit operations
-        edit_buttons = [
-            ("↶", "Undo", self.undo),
-            ("↷", "Redo", self.redo),
-            ("🔍", "Find", self.show_find_replace),
-            ("🔢", "Line numbers", self.toggle_line_numbers)
-        ]
-        
-        for icon, tooltip, command in edit_buttons:
-            btn = tk.Button(
-                toolbar,
-                text=icon,
-                font=("Segoe UI", 12),
-                bg=self.theme.get_colors()['sidebar_bg'],
-                fg=self.theme.get_colors()['fg'],
-                relief='flat',
-                padx=8,
-                pady=5,
-                cursor='hand2',
-                command=command
-            )
-            btn.pack(side='left', padx=2)
-        
-        # Zoom controls
-        tk.Frame(toolbar, bg=self.theme.get_colors()['fg'], width=1).pack(side='left', fill='y', padx=5, pady=5)
-        
-        zoom_frame = tk.Frame(toolbar, bg=self.theme.get_colors()['sidebar_bg'])
-        zoom_frame.pack(side='right', padx=10)
-        
-        tk.Button(
-            zoom_frame,
-            text="🔍+",
-            font=("Segoe UI", 10),
-            bg=self.theme.get_colors()['sidebar_bg'],
-            fg=self.theme.get_colors()['fg'],
-            relief='flat',
-            padx=5,
-            pady=2,
-            command=self.zoom_in
-        ).pack(side='left')
-        
-        self.zoom_label = tk.Label(
-            zoom_frame,
-            text="100%",
-            font=("Segoe UI", 9),
-            bg=self.theme.get_colors()['sidebar_bg'],
-            fg=self.theme.get_colors()['primary']
-        )
-        self.zoom_label.pack(side='left', padx=5)
-        
-        tk.Button(
-            zoom_frame,
-            text="🔍-",
-            font=("Segoe UI", 10),
-            bg=self.theme.get_colors()['sidebar_bg'],
-            fg=self.theme.get_colors()['fg'],
-            relief='flat',
-            padx=5,
-            pady=2,
-            command=self.zoom_out
-        ).pack(side='left')
-    
-    def create_context_menu(self):
-        """Create context menu for text editor"""
-        self.context_menu = tk.Menu(self.text_editor, tearoff=0)
-        self.context_menu.add_command(label="Undo", command=self.undo, accelerator="Ctrl+Z")
-        self.context_menu.add_command(label="Redo", command=self.redo, accelerator="Ctrl+Y")
-        self.context_menu.add_separator()
-        self.context_menu.add_command(label="Cut", command=self.cut, accelerator="Ctrl+X")
-        self.context_menu.add_command(label="Copy", command=self.copy, accelerator="Ctrl+C")
-        self.context_menu.add_command(label="Paste", command=self.paste, accelerator="Ctrl+V")
-        self.context_menu.add_separator()
-        self.context_menu.add_command(label="Select All", command=self.select_all, accelerator="Ctrl+A")
-        self.context_menu.add_command(label="Find & Replace", command=self.show_find_replace, accelerator="Ctrl+F")
-        
-        self.text_editor.bind("<Button-3>", self.show_context_menu)
-    
-    def show_context_menu(self, event):
-        """Show context menu"""
-        try:
-            self.context_menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            self.context_menu.grab_release()
-    
-    def setup_syntax_highlighting(self):
-        """Setup syntax highlighting tags"""
-        # Define syntax highlighting colors
-        colors = self.theme.get_colors()
-        
-        self.text_editor.tag_configure('keyword', foreground='#569cd6', font=('Consolas', 11, 'bold'))
-        self.text_editor.tag_configure('string', foreground='#ce9178')
-        self.text_editor.tag_configure('comment', foreground='#6a9955', font=('Consolas', 11, 'italic'))
-        self.text_editor.tag_configure('number', foreground='#b5cea8')
-        self.text_editor.tag_configure('function', foreground='#dcdcaa', font=('Consolas', 11, 'bold'))
-        self.text_editor.tag_configure('class', foreground='#4ec9b0', font=('Consolas', 11, 'bold'))
-    
-    def sync_scroll(self, *args):
-        """Synchronize scrolling between text editor and line numbers"""
-        self.text_editor.yview(*args)
-        self.line_numbers.yview(*args)
-    
-    def on_mousewheel(self, event):
-        """Handle mouse wheel scrolling"""
-        self.line_numbers.yview_scroll(int(-1*(event.delta/120)), "units")
-    
-    def on_ctrl_mousewheel(self, event):
-        """Handle Ctrl+mouse wheel for zooming"""
-        if event.delta > 0:
-            self.zoom_in()
-        else:
-            self.zoom_out()
-    
-    def on_text_change(self, event=None):
-        """Handle text changes"""
-        self.update_line_numbers()
-        if self.change_callback:
-            self.change_callback()
-    
-    def update_line_numbers(self):
-        """Update line numbers display"""
-        line_count = int(self.text_editor.index('end-1c').split('.')[0])
-        line_numbers_content = '\n'.join(str(i) for i in range(1, line_count + 1))
-        
-        self.line_numbers.config(state='normal')
-        self.line_numbers.delete('1.0', 'end')
-        self.line_numbers.insert('1.0', line_numbers_content)
-        self.line_numbers.config(state='disabled')
-    
-    def show_find_replace(self):
-        """Show find and replace dialog"""
-        if self.search_window and self.search_window.winfo_exists():
-            self.search_window.lift()
-            return
-        
-        self.search_window = tk.Toplevel(self.parent)
-        self.search_window.title("Find & Replace")
-        self.search_window.geometry("450x250")
-        self.search_window.resizable(False, False)
-        self.search_window.configure(bg=self.theme.get_colors()['bg'])
-        self.search_window.transient(self.parent)
-        
-        # Center the window
-        self.search_window.update_idletasks()
-        x = (self.search_window.winfo_screenwidth() // 2) - (450 // 2)
-        y = (self.search_window.winfo_screenheight() // 2) - (250 // 2)
-        self.search_window.geometry(f"450x250+{x}+{y}")
-        
-        # Find section
-        find_frame = tk.Frame(self.search_window, bg=self.theme.get_colors()['bg'])
-        find_frame.pack(fill='x', padx=20, pady=10)
-        
-        tk.Label(find_frame, text="Find:", bg=self.theme.get_colors()['bg'], fg=self.theme.get_colors()['fg']).pack(anchor='w')
-        self.find_entry = tk.Entry(find_frame, width=50, font=('Segoe UI', 10))
-        self.find_entry.pack(fill='x', pady=(5, 0))
-        
-        # Replace section
-        replace_frame = tk.Frame(self.search_window, bg=self.theme.get_colors()['bg'])
-        replace_frame.pack(fill='x', padx=20, pady=10)
-        
-        tk.Label(replace_frame, text="Replace:", bg=self.theme.get_colors()['bg'], fg=self.theme.get_colors()['fg']).pack(anchor='w')
-        self.replace_entry = tk.Entry(replace_frame, width=50, font=('Segoe UI', 10))
-        self.replace_entry.pack(fill='x', pady=(5, 0))
-        
-        # Options
-        options_frame = tk.Frame(self.search_window, bg=self.theme.get_colors()['bg'])
-        options_frame.pack(fill='x', padx=20, pady=10)
-        
-        self.case_sensitive_var = tk.BooleanVar()
-        self.whole_word_var = tk.BooleanVar()
-        self.regex_var = tk.BooleanVar()
-        
-        tk.Checkbutton(options_frame, text="Case sensitive", variable=self.case_sensitive_var,
-                      bg=self.theme.get_colors()['bg'], fg=self.theme.get_colors()['fg']).pack(side='left')
-        tk.Checkbutton(options_frame, text="Whole word", variable=self.whole_word_var,
-                      bg=self.theme.get_colors()['bg'], fg=self.theme.get_colors()['fg']).pack(side='left', padx=(20, 0))
-        tk.Checkbutton(options_frame, text="Regex", variable=self.regex_var,
-                      bg=self.theme.get_colors()['bg'], fg=self.theme.get_colors()['fg']).pack(side='left', padx=(20, 0))
-        
-        # Buttons
-        button_frame = tk.Frame(self.search_window, bg=self.theme.get_colors()['bg'])
-        button_frame.pack(fill='x', padx=20, pady=20)
-        
-        tk.Button(button_frame, text="Find Next", command=self.find_next,
-                 bg=self.theme.get_colors()['primary'], fg='white', padx=15).pack(side='left')
-        tk.Button(button_frame, text="Replace", command=self.replace_current,
-                 bg=self.theme.get_colors()['info'], fg='white', padx=15).pack(side='left', padx=(10, 0))
-        tk.Button(button_frame, text="Replace All", command=self.replace_all,
-                 bg=self.theme.get_colors()['success'], fg='white', padx=15).pack(side='left', padx=(10, 0))
-        tk.Button(button_frame, text="Close", command=self.close_search,
-                 bg=self.theme.get_colors()['secondary'], fg='white', padx=15).pack(side='right')
-        
-        self.search_window.protocol("WM_DELETE_WINDOW", self.close_search)
-        self.find_entry.focus()
-        self.find_entry.bind('<Return>', lambda e: self.find_next())
-        self.replace_entry.bind('<Return>', lambda e: self.replace_current())
-    
-    def find_next(self):
-        """Find next occurrence"""
-        search_term = self.find_entry.get()
-        if not search_term:
-            return
-        
-        # Get search options
-        case_sensitive = self.case_sensitive_var.get()
-        whole_word = self.whole_word_var.get()
-        use_regex = self.regex_var.get()
-        
-        start_pos = self.text_editor.index(tk.INSERT)
-        
-        if use_regex:
-            # Regex search
-            import re
-            flags = 0 if case_sensitive else re.IGNORECASE
-            try:
-                pattern = re.compile(search_term, flags)
-            except re.error:
-                messagebox.showerror("Error", "Invalid regular expression")
-                return
-            
-            content = self.text_editor.get(start_pos, tk.END)
-            match = pattern.search(content)
-            if match:
-                start_idx = start_pos + f"+{match.start()}c"
-                end_idx = start_pos + f"+{match.end()}c"
-                self.text_editor.tag_remove(tk.SEL, '1.0', tk.END)
-                self.text_editor.tag_add(tk.SEL, start_idx, end_idx)
-                self.text_editor.mark_set(tk.INSERT, end_idx)
-                self.text_editor.see(start_idx)
-        else:
-            # Normal search
-            pos = self.text_editor.search(search_term, start_pos, tk.END, nocase=not case_sensitive)
-            if pos:
-                end_pos = f"{pos}+{len(search_term)}c"
-                self.text_editor.tag_remove(tk.SEL, '1.0', tk.END)
-                self.text_editor.tag_add(tk.SEL, pos, end_pos)
-                self.text_editor.mark_set(tk.INSERT, end_pos)
-                self.text_editor.see(pos)
-            else:
-                messagebox.showinfo("Find", "No more occurrences found")
-    
-    def replace_current(self):
-        """Replace current selection"""
-        try:
-            if self.text_editor.tag_ranges(tk.SEL):
-                self.text_editor.delete(tk.SEL_FIRST, tk.SEL_LAST)
-                self.text_editor.insert(tk.INSERT, self.replace_entry.get())
-                self.find_next()
-        except tk.TclError:
-            self.find_next()
-    
-    def replace_all(self):
-        """Replace all occurrences"""
-        search_term = self.find_entry.get()
-        replace_term = self.replace_entry.get()
-        if not search_term:
-            return
-        
-        content = self.text_editor.get('1.0', tk.END)
-        
-        if self.regex_var.get():
-            import re
-            flags = 0 if self.case_sensitive_var.get() else re.IGNORECASE
-            try:
-                new_content, count = re.subn(search_term, replace_term, content, flags=flags)
-            except re.error:
-                messagebox.showerror("Error", "Invalid regular expression")
-                return
-        else:
-            if self.case_sensitive_var.get():
-                new_content = content.replace(search_term, replace_term)
-            else:
-                # Case-insensitive replace
-                import re
-                new_content = re.sub(re.escape(search_term), replace_term, content, flags=re.IGNORECASE)
-            
-            count = content.count(search_term)
-        
-        self.text_editor.delete('1.0', tk.END)
-        self.text_editor.insert('1.0', new_content)
-        
-        messagebox.showinfo("Replace All", f"Replaced {count} occurrences")
-    
-    def close_search(self):
-        """Close search dialog"""
-        if self.search_window:
-            self.search_window.destroy()
-            self.search_window = None
-    
-    # Text editor operations
-    def get_text(self):
-        """Get all text from editor"""
-        return self.text_editor.get('1.0', tk.END + '-1c')
-    
-    def set_text(self, text):
-        """Set text in editor"""
-        self.text_editor.delete('1.0', tk.END)
-        self.text_editor.insert('1.0', text)
-        self.update_line_numbers()
-    
-    def clear_text(self):
-        """Clear all text"""
-        self.text_editor.delete('1.0', tk.END)
-        self.update_line_numbers()
-    
-    def undo(self):
-        """Undo last action"""
-        try:
-            self.text_editor.edit_undo()
-        except tk.TclError:
-            pass
-    
-    def redo(self):
-        """Redo last undone action"""
-        try:
-            self.text_editor.edit_redo()
-        except tk.TclError:
-            pass
-    
-    def cut(self):
-        """Cut selected text"""
-        self.text_editor.event_generate("<<Cut>>")
-    
-    def copy(self):
-        """Copy selected text"""
-        self.text_editor.event_generate("<<Copy>>")
-    
-    def paste(self):
-        """Paste text from clipboard"""
-        self.text_editor.event_generate("<<Paste>>")
-    
-    def select_all(self):
-        """Select all text"""
-        self.text_editor.tag_add(tk.SEL, "1.0", tk.END)
-    
-    def toggle_line_numbers(self):
-        """Toggle line numbers visibility"""
-        if self.line_numbers.winfo_viewable():
-            self.line_numbers.pack_forget()
-        else:
-            self.line_numbers.pack(side='left', fill='y', before=self.text_editor)
-    
-    def zoom_in(self):
-        """Increase font size"""
-        if self.zoom_level < 300:
-            self.zoom_level += 10
-            self.apply_zoom()
-    
-    def zoom_out(self):
-        """Decrease font size"""
-        if self.zoom_level > 50:
-            self.zoom_level -= 10
-            self.apply_zoom()
-    
-    def apply_zoom(self):
-        """Apply current zoom level"""
-        base_size = 11
-        new_size = int(base_size * (self.zoom_level / 100))
-        font = ('Consolas', new_size)
-        
-        self.text_editor.configure(font=font)
-        self.line_numbers.configure(font=font)
-        self.zoom_label.config(text=f"{self.zoom_level}%")
-    
-    def apply_settings(self, settings):
-        """Apply editor settings"""
-        font_family = settings.get('editor_font_family', 'Consolas')
-        font_size = settings.get('editor_font_size', 11)
-        
-        # Apply font
-        font = (font_family, font_size)
-        self.text_editor.configure(font=font)
-        self.line_numbers.configure(font=font)
-        
-        # Apply word wrap
-        wrap_mode = 'word' if settings.get('editor_word_wrap', False) else 'none'
-        self.text_editor.configure(wrap=wrap_mode)
-        
-        # Show/hide line numbers
-        if settings.get('show_line_numbers', True):
-            if not self.line_numbers.winfo_viewable():
-                self.line_numbers.pack(side='left', fill='y', before=self.text_editor)
-        else:
-            if self.line_numbers.winfo_viewable():
-                self.line_numbers.pack_forget()
-    
-    def set_change_callback(self, callback):
-        """Set callback for text changes"""
-        self.change_callback = callback
-    
-    def get_frame(self):
-        """Get the main editor frame"""
-        return self.editor_frame
-
-# Enhanced PDFViewer class
-class PDFViewer:
-    """PDF viewer with navigation and zoom capabilities"""
-    
-    def __init__(self, parent, theme_manager):
-        self.parent = parent
-        self.theme = theme_manager
-        self.current_pdf = None
-        self.current_page = 0
-        self.zoom_level = 1.0
-        self.rotation = 0
-        
-        if HAS_PDF_SUPPORT:
-            self.create_pdf_viewer()
-        else:
-            self.create_placeholder()
-    
-    def create_pdf_viewer(self):
-        """Create PDF viewer interface"""
-        self.pdf_frame = tk.Frame(self.parent, bg=self.theme.get_colors()['bg'])
-        
-        # Toolbar
-        self.create_toolbar()
-        
-        # PDF display area
-        display_frame = tk.Frame(self.pdf_frame, bg=self.theme.get_colors()['bg'])
-        display_frame.pack(fill='both', expand=True, padx=10, pady=10)
-        
-        self.pdf_canvas = tk.Canvas(display_frame, bg='white', highlightthickness=0)
-        
-        # Scrollbars
-        v_scrollbar = tk.Scrollbar(display_frame, orient='vertical', command=self.pdf_canvas.yview)
-        h_scrollbar = tk.Scrollbar(display_frame, orient='horizontal', command=self.pdf_canvas.xview)
-        
-        self.pdf_canvas.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
-        
-        # Pack scrollbars and canvas
-        v_scrollbar.pack(side='right', fill='y')
-        h_scrollbar.pack(side='bottom', fill='x')
-        self.pdf_canvas.pack(fill='both', expand=True)
-        
-        # Bind mouse events
-        self.pdf_canvas.bind('<MouseWheel>', self.on_mousewheel)
-        self.pdf_canvas.bind('<Control-MouseWheel>', self.on_ctrl_mousewheel)
-        self.pdf_canvas.bind('<Button-1>', self.on_canvas_click)
-    
-    def create_toolbar(self):
-        """Create PDF viewer toolbar"""
-        toolbar = tk.Frame(self.pdf_frame, bg=self.theme.get_colors()['sidebar_bg'], height=50)
-        toolbar.pack(fill='x', padx=10, pady=(10, 0))
-        toolbar.pack_propagate(False)
-        
-        # File operations
-        tk.Button(
-            toolbar,
-            text="📂 Open PDF",
-            command=self.open_pdf,
-            bg=self.theme.get_colors()['primary'],
-            fg='white',
-            font=("Segoe UI", 10),
-            padx=15,
-            pady=5,
-            relief='flat'
-        ).pack(side='left', padx=5, pady=10)
-        
-        # Navigation
-        nav_frame = tk.Frame(toolbar, bg=self.theme.get_colors()['sidebar_bg'])
-        nav_frame.pack(side='left', padx=20)
-        
-        tk.Button(
-            nav_frame,
-            text="⮜",
-            command=self.prev_page,
-            bg=self.theme.get_colors()['secondary'],
-            fg='white',
-            font=("Segoe UI", 12),
-            padx=10,
-            pady=5,
-            relief='flat'
-        ).pack(side='left', padx=2)
-        
-        self.page_entry = tk.Entry(nav_frame, width=5, font=("Segoe UI", 10), justify='center')
-        self.page_entry.pack(side='left', padx=5)
-        self.page_entry.bind('<Return>', self.goto_page)
-        
-        self.page_label = tk.Label(
-            nav_frame,
-            text="/ 0",
-            font=("Segoe UI", 10),
-            bg=self.theme.get_colors()['sidebar_bg'],
-            fg=self.theme.get_colors()['fg']
-        )
-        self.page_label.pack(side='left', padx=2)
-        
-        tk.Button(
-            nav_frame,
-            text="⮞",
-            command=self.next_page,
-            bg=self.theme.get_colors()['secondary'],
-            fg='white',
-            font=("Segoe UI", 12),
-            padx=10,
-            pady=5,
-            relief='flat'
-        ).pack(side='left', padx=2)
-        
-        # Zoom controls
-        zoom_frame = tk.Frame(toolbar, bg=self.theme.get_colors()['sidebar_bg'])
-        zoom_frame.pack(side='left', padx=20)
-        
-        tk.Button(
-            zoom_frame,
-            text="🔍-",
-            command=self.zoom_out,
-            bg=self.theme.get_colors()['info'],
-            fg='white',
-            font=("Segoe UI", 10),
-            padx=8,
-            pady=5,
-            relief='flat'
-        ).pack(side='left', padx=2)
-        
-        self.zoom_label = tk.Label(
-            zoom_frame,
-            text="100%",
-            font=("Segoe UI", 10),
-            bg=self.theme.get_colors()['sidebar_bg'],
-            fg=self.theme.get_colors()['primary'],
-            width=6
-        )
-        self.zoom_label.pack(side='left', padx=5)
-        
-        tk.Button(
-            zoom_frame,
-            text="🔍+",
-            command=self.zoom_in,
-            bg=self.theme.get_colors()['info'],
-            fg='white',
-            font=("Segoe UI", 10),
-            padx=8,
-            pady=5,
-            relief='flat'
-        ).pack(side='left', padx=2)
-        
-        # Rotation
-        tk.Button(
-            toolbar,
-            text="🔄",
-            command=self.rotate_page,
-            bg=self.theme.get_colors()['warning'],
-            fg='white',
-            font=("Segoe UI", 10),
-            padx=10,
-            pady=5,
-            relief='flat'
-        ).pack(side='left', padx=(20, 5))
-        
-        # Status
-        self.status_label = tk.Label(
-            toolbar,
-            text="No PDF loaded",
-            font=("Segoe UI", 10),
-            bg=self.theme.get_colors()['sidebar_bg'],
-            fg=self.theme.get_colors()['fg']
-        )
-        self.status_label.pack(side='right', padx=10)
-    
-    def create_placeholder(self):
-        """Create placeholder when PDF support is not available"""
-        self.pdf_frame = tk.Frame(self.parent, bg=self.theme.get_colors()['bg'])
-        
-        placeholder_frame = tk.Frame(self.pdf_frame, bg=self.theme.get_colors()['bg'])
-        placeholder_frame.pack(expand=True, fill='both')
-        
-        tk.Label(
-            placeholder_frame,
-            text="📄",
-            font=("Segoe UI", 48),
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['secondary']
-        ).pack(expand=True, pady=(100, 20))
-        
-        tk.Label(
-            placeholder_frame,
-            text="PDF Viewer Not Available",
-            font=("Segoe UI", 18, "bold"),
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['fg']
-        ).pack(expand=True)
-        
-        tk.Label(
-            placeholder_frame,
-            text="Install PyMuPDF to enable PDF viewing:",
-            font=("Segoe UI", 12),
-            bg=self.theme.get_colors()['bg'],
-            fg=self.theme.get_colors()['secondary']
-        ).pack(expand=True, pady=10)
-        
-        tk.Label(
-            placeholder_frame,
-            text="pip install PyMuPDF",
-            font=("Consolas", 11, "bold"),
-            bg=self.theme.get_colors()['editor_bg'],
-            fg=self.theme.get_colors()['primary'],
-            padx=20,
-            pady=10,
-            relief='solid',
-            bd=1
-        ).pack(expand=True)
-    
-    def open_pdf(self):
-        """Open PDF file"""
-        if not HAS_PDF_SUPPORT:
-            messagebox.showerror("Error", "PDF support not available. Install PyMuPDF.")
-            return
-        
-        file_path = filedialog.askopenfilename(
-            title="Open PDF",
-            filetypes=[("PDF files", "*.pdf")]
-        )
-        
-        if file_path:
-            try:
-                self.current_pdf = fitz.open(file_path)
-                self.current_page = 0
-                self.zoom_level = 1.0
-                self.rotation = 0
-                self.display_page()
-                self.update_navigation()
-                self.status_label.config(text=f"Loaded: {os.path.basename(file_path)}")
-                logger.info(f"PDF opened: {file_path}")
-            except Exception as e:
-                messagebox.showerror("Error", f"Could not open PDF:\n{str(e)}")
-                logger.error(f"PDF open error: {e}")
-    
-    def display_page(self):
-        """Display current PDF page"""
-        if not self.current_pdf:
-            return
-        
-        try:
-            page = self.current_pdf[self.current_page]
-            
-            # Apply rotation and zoom
-            mat = fitz.Matrix(self.zoom_level, self.zoom_level)
-            if self.rotation != 0:
-                mat = mat * fitz.Matrix(self.rotation)
-            
-            pix = page.get_pixmap(matrix=mat)
-            img_data = pix.tobytes("ppm")
-            
-            # Clear canvas and display image
-            self.pdf_canvas.delete("all")
-            self.pdf_image = tk.PhotoImage(data=img_data)
-            
-            # Center the image
-            canvas_width = self.pdf_canvas.winfo_width()
-            canvas_height = self.pdf_canvas.winfo_height()
-            img_width = self.pdf_image.width()
-            img_height = self.pdf_image.height()
-            
-            x = max(0, (canvas_width - img_width) // 2)
-            y = max(0, (canvas_height - img_height) // 2)
-            
-            self.pdf_canvas.create_image(x, y, anchor='nw', image=self.pdf_image)
-            self.pdf_canvas.configure(scrollregion=self.pdf_canvas.bbox("all"))
-            
-            # Update zoom label
-            self.zoom_label.config(text=f"{int(self.zoom_level * 100)}%")
-            
-        except Exception as e:
-            messagebox.showerror("Error", f"Could not display page:\n{str(e)}")
-            logger.error(f"PDF display error: {e}")
-    
-    def update_navigation(self):
-        """Update navigation controls"""
-        if self.current_pdf:
-            total_pages = len(self.current_pdf)
-            self.page_label.config(text=f"/ {total_pages}")
-            self.page_entry.delete(0, tk.END)
-            self.page_entry.insert(0, str(self.current_page + 1))
-    
-    def prev_page(self):
-        """Go to previous page"""
-        if self.current_pdf and self.current_page > 0:
-            self.current_page -= 1
-            self.display_page()
-            self.update_navigation()
-    
-    def next_page(self):
-        """Go to next page"""
-        if self.current_pdf and self.current_page < len(self.current_pdf) - 1:
-            self.current_page += 1
-            self.display_page()
-            self.update_navigation()
-    
-    def goto_page(self, event=None):
-        """Go to specific page"""
-        if not self.current_pdf:
-            return
-        
-        try:
-            page_num = int(self.page_entry.get()) - 1
-            if 0 <= page_num < len(self.current_pdf):
-                self.current_page = page_num
-                self.display_page()
-                self.update_navigation()
-            else:
-                messagebox.showerror("Error", f"Page number must be between 1 and {len(self.current_pdf)}")
-        except ValueError:
-            messagebox.showerror("Error", "Please enter a valid page number")
-    
-    def zoom_in(self):
-        """Increase zoom level"""
-        if self.zoom_level < 5.0:
-            self.zoom_level *= 1.25
-            self.display_page()
-    
-    def zoom_out(self):
-        """Decrease zoom level"""
-        if self.zoom_level > 0.2:
-            self.zoom_level /= 1.25
-            self.display_page()
-    
-    def rotate_page(self):
-        """Rotate page 90 degrees"""
-        self.rotation = (self.rotation + 90) % 360
-        self.display_page()
-    
-    def on_mousewheel(self, event):
-        """Handle mouse wheel scrolling"""
-        self.pdf_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-    
-    def on_ctrl_mousewheel(self, event):
-        """Handle Ctrl+mouse wheel for zooming"""
-        if event.delta > 0:
-            self.zoom_in()
-        else:
-            self.zoom_out()
-    
-    def on_canvas_click(self, event):
-        """Handle canvas click"""
-        self.pdf_canvas.focus_set()
-    
-    def get_frame(self):
-        """Get the main PDF viewer frame"""
-        return self.pdf_frame
-
-# Application entry point and main function
-def main():
-    """Main function to run the application"""
-    try:
-        # Set up logging
-        setup_logging()
-        
-        # Create and run the application
-        app = ModernApp()
-        app.run()
-        
-    except KeyboardInterrupt:
-        logger.info("Application interrupted by user")
-        sys.exit(0)
-    except Exception as e:
-        # Show error dialog if GUI fails
-        try:
-            root = tk.Tk()
-            root.withdraw()
-            messagebox.showerror(
-                "Application Error",
-                f"An error occurred while starting the application:\n\n{str(e)}\n\n"
-                f"Please check that all dependencies are installed:\n"
-                f"• pip install requests (for updates)\n"
-                f"• pip install PyMuPDF (for PDF support)\n"
-                f"• pip install reportlab (for PDF export)\n\n"
-                f"Check the log file for more details: {LOG_FILE}"
-            )
-        except:
-            # If even the error dialog fails, print to console
-            print(f"Critical error: {e}")
-            print("Please ensure Python and tkinter are properly installed.")
-        
-        logger.error(f"Application startup failed: {e}", exc_info=True)
-        sys.exit(1)
-
-import logging
-import os
-import sys
-
-def setup_logging():
-    """Set up application logging"""
-    # Create logs directory if it doesn't exist
-    log_dir = os.path.dirname(LOG_FILE)
-    if log_dir and not os.path.exists(log_dir):
-        os.makedirs(log_dir)
-    
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(LOG_FILE, encoding='utf-8'),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
-    
-    # Set up logger
-    global logger
-    logger = logging.getLogger(APP_NAME)
-    logger.info("="*50)
-    logger.info(f"{APP_NAME} v{CURRENT_VERSION} - Session Started")
-    logger.info("="*50)
-def safe_import_fitz():
-    """Safely import fitz module"""
-    try:
-        import fitz
-        return True
-    except ImportError:
-        return False
-
-def safe_import_requests():
-    """Safely import requests module"""
-    try:
-        import requests
-        return True
-    except ImportError:
-        return False
-
-def check_dependencies():
-    """Check for optional dependencies and log status"""
-    dependencies = {
-        'requests': safe_import_requests(),
-        'PyMuPDF': safe_import_fitz(),
-        'reportlab': canvas is not None
-    }
-    
-    logger.info("Dependency check:")
-    for name, available in dependencies.items():
-        status = "✓ Available" if available else "✗ Not available"
-        logger.info(f"  {name}: {status}")
-    
-    return dependencies# Enhanced ConfigManager class
-class ConfigManager:
-    """Enhanced configuration manager with validation and defaults"""
-    
-    def __init__(self, config_file=CONFIG_FILE):
-        self.config_file = config_file
-        self.config = self.load_config()
-        self.default_config = self.get_default_config()
-    
-    def get_default_config(self):
-        """Get default configuration"""
-        return {
-            # User preferences
-            'user_name': '',
-            'user_email': '',
-            
-            # Appearance
-            'theme': 'dark',
-            'window_geometry': '1200x800',
-            'window_state': 'normal',
-            
-            # Editor settings
-            'editor_font_family': 'Consolas',
-            'editor_font_size': 11,
-            'show_line_numbers': True,
-            'editor_word_wrap': False,
-            'editor_syntax_highlighting': True,
-            
-            # File management
-            'auto_save': True,
-            'auto_save_interval': 30,
-            'create_backups': True,
-            'max_recent_files': 10,
-            'recent_files': [],
-            
-            # Updates
-            'check_updates_on_startup': True,
-            'last_update_check': '',
-            
-            # Advanced
-            'debug_mode': False,
-            'log_level': 'INFO'
-        }
-    
-    def load_config(self):
-        """Load configuration from file"""
-        try:
-            if os.path.exists(self.config_file):
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                    logger.info(f"Configuration loaded from {self.config_file}")
-                    return config
-        except Exception as e:
-            logger.error(f"Error loading config: {e}")
-        
-        # Return default config if loading fails
-        return self.get_default_config()
-    
-    def save_config(self):
-        """Save configuration to file"""
-        try:
-            # Ensure all default keys exist
-            for key, value in self.default_config.items():
-                if key not in self.config:
-                    self.config[key] = value
-            
-            with open(self.config_file, 'w', encoding='utf-8') as f:
-                json.dump(self.config, f, indent=2, ensure_ascii=False)
-            
-            logger.info(f"Configuration saved to {self.config_file}")
-            return True
-        except Exception as e:
-            logger.error(f"Error saving config: {e}")
-            return False
-    
-    def get(self, key, default=None):
-        """Get configuration value"""
-        return self.config.get(key, self.default_config.get(key, default))
-    
-    def set(self, key, value):
-        """Set configuration value"""
-        self.config[key] = value
-    
-    def update(self, updates):
-        """Update multiple configuration values"""
-        self.config.update(updates)
-    
-    def reset_to_defaults(self):
-        """Reset configuration to defaults"""
-        self.config = self.get_default_config().copy()
-        return self.save_config()
-
-# Enhanced FileManager class
-class FileManager:
-    """Enhanced file management with backup and recovery"""
-    
-    def __init__(self, config_manager):
-        self.config = config_manager
-        self.current_file = None
-        self.unsaved_changes = False
-        self.backup_dir = "backups"
-        
-        # Create backup directory
-        if not os.path.exists(self.backup_dir):
-            os.makedirs(self.backup_dir)
-    
-    def new_file(self):
-        """Create new file"""
-        if self.ask_save_changes():
-            self.current_file = None
-            self.unsaved_changes = False
-            logger.info("New file created")
-            return True
-        return False
-    
-    def open_file(self, file_path=None):
-        """Open file with dialog or specified path"""
-        if not self.ask_save_changes():
-            return None
-        
-        if not file_path:
-            file_path = filedialog.askopenfilename(
-                title="Open File",
-                filetypes=[
-                    ("Text files", "*.txt"),
-                    ("Python files", "*.py"),
-                    ("JavaScript files", "*.js"),
-                    ("HTML files", "*.html"),
-                    ("CSS files", "*.css"),
-                    ("JSON files", "*.json"),
-                    ("Markdown files", "*.md"),
-                    ("All files", "*.*")
-                ]
-            )
-        
-        if file_path and os.path.exists(file_path):
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                
-                self.current_file = file_path
-                self.unsaved_changes = False
-                self.add_to_recent_files(file_path)
-                logger.info(f"File opened: {file_path}")
-                return content
-                
-            except Exception as e:
-                logger.error(f"Error opening file {file_path}: {e}")
-                messagebox.showerror("Error", f"Could not open file:\n{str(e)}")
-        
-        return None
-    
-    def save_file(self, content, file_path=None):
-        """Save file with optional path"""
-        if not file_path:
-            file_path = self.current_file
-        
-        if not file_path:
-            return self.save_file_as(content)
-        
-        try:
-            # Create backup if file exists and backups are enabled
-            if os.path.exists(file_path) and self.config.get('create_backups', True):
-                self.create_backup(file_path)
-            
-            # Save file
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-            
-            self.current_file = file_path
-            self.unsaved_changes = False
-            self.add_to_recent_files(file_path)
-            logger.info(f"File saved: {file_path}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error saving file {file_path}: {e}")
-            messagebox.showerror("Error", f"Could not save file:\n{str(e)}")
-            return False
-    
-    def save_file_as(self, content):
-        """Save file with new name"""
-        file_path = filedialog.asksaveasfilename(
-            title="Save File As",
-            defaultextension=".txt",
-            filetypes=[
-                ("Text files", "*.txt"),
-                ("Python files", "*.py"),
-                ("JavaScript files", "*.js"),
-                ("HTML files", "*.html"),
-                ("CSS files", "*.css"),
-                ("JSON files", "*.json"),
-                ("Markdown files", "*.md"),
-                ("All files", "*.*")
-            ]
-        )
-        
-        if file_path:
-            return self.save_file(content, file_path)
-        return False
-    
-    def create_backup(self, file_path):
-        """Create backup of file"""
-        try:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = os.path.basename(file_path)
-            backup_name = f"{filename}.{timestamp}.backup"
-            backup_path = os.path.join(self.backup_dir, backup_name)
-            
-            import shutil
-            shutil.copy2(file_path, backup_path)
-            logger.info(f"Backup created: {backup_path}")
-            
-            # Clean old backups (keep last 10)
-            self.cleanup_old_backups(filename)
-            
-        except Exception as e:
-            logger.warning(f"Could not create backup: {e}")
-    
-    def cleanup_old_backups(self, filename, keep_count=10):
-        """Clean up old backup files"""
-        try:
-            # Find all backups for this file
-            pattern = f"{filename}.*.backup"
-            backups = []
-            
-            for file in os.listdir(self.backup_dir):
-                if file.startswith(filename) and file.endswith('.backup'):
-                    backup_path = os.path.join(self.backup_dir, file)
-                    backups.append((backup_path, os.path.getmtime(backup_path)))
-            
-            # Sort by modification time (newest first)
-            backups.sort(key=lambda x: x[1], reverse=True)
-            
-            # Remove old backups
-            for backup_path, _ in backups[keep_count:]:
-                os.remove(backup_path)
-                logger.info(f"Old backup removed: {backup_path}")
-                
-        except Exception as e:
-            logger.warning(f"Error cleaning up backups: {e}")
-    
     def add_to_recent_files(self, file_path):
         """Add file to recent files list"""
         recent_files = self.config.get('recent_files', [])
-        max_recent = self.config.get('max_recent_files', 10)
         
         # Remove if already exists
         if file_path in recent_files:
@@ -4543,74 +1037,1432 @@ class FileManager:
         # Add to beginning
         recent_files.insert(0, file_path)
         
-        # Keep only specified number of files
-        recent_files = recent_files[:max_recent]
+        # Keep only last 10 files
+        recent_files = recent_files[:10]
         
-        # Update config
-        self.config.set('recent_files', recent_files)
-        self.config.save_config()
+        self.config['recent_files'] = recent_files
+        self.save_config()
+        self.update_recent_files_list()
     
-    def get_recent_files(self):
-        """Get list of recent files (only existing ones)"""
+    def update_recent_files_list(self):
+        """Update recent files listbox"""
+        self.recent_list.clear()
         recent_files = self.config.get('recent_files', [])
-        return [f for f in recent_files if os.path.exists(f)]
+        
+        for file_path in recent_files:
+            if os.path.exists(file_path):
+                filename = os.path.basename(file_path)
+                self.recent_list.addItem(filename)
     
-    def ask_save_changes(self):
-        """Ask user to save changes if there are any"""
+    def open_recent_file(self, item):
+        """Open recent file from list"""
+        filename = item.text()
+        recent_files = self.config.get('recent_files', [])
+        
+        for file_path in recent_files:
+            if os.path.basename(file_path) == filename:
+                if os.path.exists(file_path):
+                    self.load_file(file_path)
+                break
+    
+    # Document statistics
+    def update_document_stats(self):
+        """Update document statistics in sidebar"""
+        try:
+            content = self.text_editor.toPlainText()
+            lines = len(content.split('\n')) if content else 0
+            words = len(content.split()) if content else 0
+            chars = len(content)
+            
+            stats_text = f"Lines: {lines:,}\nWords: {words:,}\nCharacters: {chars:,}"
+            self.stats_label.setText(stats_text)
+        except:
+            pass
+    
+    # Text change handling
+    def on_text_changed(self):
+        """Handle text editor changes"""
+        self.unsaved_changes = True
+        if self.current_file:
+            title = f"{APP_NAME} v{CURRENT_VERSION} - {os.path.basename(self.current_file)} *"
+        else:
+            title = f"{APP_NAME} v{CURRENT_VERSION} - Untitled *"
+        self.setWindowTitle(title)
+        
+        # Auto-save
+        if self.config.get('auto_save', True) and self.current_file:
+            QTimer.singleShot(3000, self.auto_save)
+    
+    def auto_save(self):
+        """Auto-save current file"""
+        if self.unsaved_changes and self.current_file and self.config.get('auto_save', True):
+            try:
+                content = self.text_editor.toPlainText()
+                
+                with open(self.current_file, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                
+                self.unsaved_changes = False
+                self.status_label.setText(f"Auto-saved: {os.path.basename(self.current_file)}")
+                
+                # Update title to remove asterisk
+                self.setWindowTitle(f"{APP_NAME} v{CURRENT_VERSION} - {os.path.basename(self.current_file)}")
+                
+            except Exception as e:
+                self.status_label.setText(f"Auto-save failed: {str(e)}")
+    
+    # Settings event handlers
+    def change_theme(self, theme_name):
+        """Change application theme"""
+        self.config['theme'] = theme_name
+        self.save_config()
+        self.apply_styles()
+        self.status_label.setText(f"Theme changed to {theme_name}")
+    
+    def change_font(self):
+        """Change editor font family"""
+        font_family = self.font_combo.currentText()
+        self.config['font_family'] = font_family
+        self.save_config()
+        
+        # Update text editor font
+        current_size = self.text_editor.font().pointSize()
+        new_font = QFont(font_family, current_size)
+        self.text_editor.setFont(new_font)
+        
+        self.status_label.setText(f"Font changed to {font_family}")
+    
+    def change_font_size(self):
+        """Change editor font size"""
+        font_size = self.font_size_spin.value()
+        self.config['font_size'] = font_size
+        self.save_config()
+        
+        # Update text editor font
+        current_font = self.text_editor.font()
+        current_font.setPointSize(font_size)
+        self.text_editor.setFont(current_font)
+        
+        self.status_label.setText(f"Font size changed to {font_size}")
+    
+    def toggle_auto_save(self, checked):
+        """Toggle auto-save setting"""
+        self.config['auto_save'] = checked
+        self.save_config()
+        
+        status = "enabled" if checked else "disabled"
+        self.status_label.setText(f"Auto-save {status}")
+    
+    def toggle_auto_update(self, checked):
+        """Toggle auto-update checking"""
+        self.config['check_updates_on_startup'] = checked
+        self.save_config()
+        
+        status = "enabled" if checked else "disabled"
+        self.status_label.setText(f"Auto-update check {status}")
+    
+    # Update checking methods
+    def check_for_updates_silent(self):
+        """Check for updates silently (no user interaction if up to date)"""
+        self.update_checker = UpdateChecker(silent=True)
+        self.update_thread = QThread()
+        
+        # Move checker to thread
+        self.update_checker.moveToThread(self.update_thread)
+        
+        # Connect signals
+        self.update_checker.update_available.connect(self.on_update_available)
+        self.update_checker.update_error.connect(self.on_update_error_silent)
+        self.update_checker.no_update.connect(self.on_no_update_silent)
+        
+        # Start checking
+        self.update_thread.started.connect(self.update_checker.check_for_updates)
+        self.update_thread.start()
+    
+    def check_for_updates_manual(self):
+        """Check for updates manually (show result to user)"""
+        self.status_label.setText("Checking for updates...")
+        
+        self.update_checker = UpdateChecker(silent=False)
+        self.update_thread = QThread()
+        
+        # Move checker to thread
+        self.update_checker.moveToThread(self.update_thread)
+        
+        # Connect signals
+        self.update_checker.update_available.connect(self.on_update_available)
+        self.update_checker.update_error.connect(self.on_update_error)
+        self.update_checker.no_update.connect(self.on_no_update)
+        
+        # Start checking
+        self.update_thread.started.connect(self.update_checker.check_for_updates)
+        self.update_thread.start()
+    
+    def on_update_available(self, update_info):
+        """Handle when update is available"""
+        self.update_thread.quit()
+        self.status_label.setText(f"Update available: v{update_info.get('version', 'Unknown')}")
+        
+        # Update last check time
+        self.config['last_update_check'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        self.save_config()
+        
+        # Update the label in settings if it exists
+        if hasattr(self, 'last_check_label'):
+            self.last_check_label.setText(f"Last checked: {self.config['last_update_check']}")
+        
+        # Show update dialog
+        dialog = UpdateDialog(self, update_info)
+        dialog.exec_()
+    
+    def on_update_error(self, error_message):
+        """Handle update check error (manual check)"""
+        self.update_thread.quit()
+        self.status_label.setText("Update check failed")
+        QMessageBox.warning(self, "Update Check Failed", error_message)
+    
+    def on_update_error_silent(self, error_message):
+        """Handle update check error (silent check)"""
+        self.update_thread.quit()
+        self.status_label.setText("Update check failed")
+        print(f"Silent update check failed: {error_message}")
+    
+    def on_no_update(self, message):
+        """Handle when no update is available (manual check)"""
+        self.update_thread.quit()
+        self.status_label.setText("Up to date")
+        QMessageBox.information(self, "No Updates", message)
+    
+    def on_no_update_silent(self, message):
+        """Handle when no update is available (silent check)"""
+        self.update_thread.quit()
+        self.status_label.setText("Up to date")
+        
+        # Update last check time
+        self.config['last_update_check'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        self.save_config()
+        
+        # Update the label in settings if it exists
+        if hasattr(self, 'last_check_label'):
+            self.last_check_label.setText(f"Last checked: {self.config['last_update_check']}")
+        
+        print(f"Silent update check: {message}")
+    
+    def show_download_dialog(self, download_url):
+        """Show download dialog"""
+        dialog = DownloadDialog(self, download_url)
+        dialog.exec_()
+    
+    def open_github(self):
+        """Open GitHub repository"""
+        github_url = VERSION_URL.replace("/raw.githubusercontent.com/", "/github.com/").replace("/main/version.json", "")
+        webbrowser.open(github_url)
+    
+    def show_about(self):
+        """Show about dialog"""
+        about_text = f"""
+        <h2>{APP_NAME}</h2>
+        <p><b>Version:</b> {CURRENT_VERSION}</p>
+        <p><b>Description:</b> A modern, feature-rich text editor built with PyQt5.</p>
+        
+        <h3>Features:</h3>
+        <ul>
+        <li>Advanced text editing with syntax highlighting</li>
+        <li>Auto-save and backup functionality</li>
+        <li>Dark, light, and blue themes</li>
+        <li>Automatic updates</li>
+        <li>Professional, modern interface</li>
+        </ul>
+        
+        <h3>Built with:</h3>
+        <ul>
+        <li>Python 3.x</li>
+        <li>PyQt5 (GUI framework)</li>
+        <li>Requests (updates)</li>
+        </ul>
+        
+        <p><b>© 2025 PixelHeaven</b><br>
+        Open source software</p>
+        """
+        
+        msg = QMessageBox()
+        msg.setWindowTitle("About")
+        msg.setTextFormat(Qt.RichText)
+        msg.setText(about_text)
+        msg.setIcon(QMessageBox.Information)
+        msg.exec_()
+    
+    def apply_styles(self):
+        """Apply theme-based styles"""
+        theme = self.config.get('theme', 'Dark')
+        
+        if theme == 'Dark':
+            self.apply_dark_theme()
+        elif theme == 'Light':
+            self.apply_light_theme()
+        elif theme == 'Blue':
+            self.apply_blue_theme()
+    
+    def apply_dark_theme(self):
+        """Apply dark theme styles"""
+        style = """
+        /* Main Application */
+        QMainWindow {
+            background-color: #2b2b2b;
+            color: #ffffff;
+        }
+        
+        /* Sidebar */
+        QFrame#sidebar {
+            background-color: #252526;
+            border-right: 1px solid #3e3e42;
+        }
+        
+        QFrame#sidebarHeader {
+            background-color: #007acc;
+            border: none;
+        }
+        
+        QLabel#appTitle {
+            color: white;
+            font-size: 16px;
+            font-weight: bold;
+            padding: 10px;
+        }
+        
+        /* Welcome Section */
+        QFrame#welcomeFrame {
+            background-color: #007acc;
+            border-radius: 8px;
+            margin: 10px;
+        }
+        
+        QLabel#welcomeTitle {
+            color: white;
+            font-size: 20px;
+            font-weight: bold;
+            margin: 20px;
+        }
+        
+        QLabel#welcomeSubtitle {
+            color: #e3f2fd;
+            font-size: 12px;
+            margin: 10px;
+        }
+        
+        QLabel#sectionTitle {
+            color: #ffffff;
+            font-size: 16px;
+            font-weight: bold;
+            margin: 20px 10px 10px 10px;
+        }
+        
+        /* Feature Cards */
+        QFrame#featureCard {
+            background-color: #3c3c3c;
+            border: 1px solid #5a5a5a;
+            border-radius: 8px;
+            margin: 5px;
+            padding: 10px;
+        }
+        
+        QLabel#featureTitle {
+            color: #4fc3f7;
+            font-size: 12px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        
+        QLabel#featureDescription {
+            color: #cccccc;
+            font-size: 10px;
+            margin-bottom: 10px;
+        }
+        
+        /* Groups */
+        QGroupBox {
+            color: #cccccc;
+            border: 1px solid #3e3e42;
+            border-radius: 5px;
+            margin: 10px 5px;
+            padding-top: 10px;
+            font-weight: bold;
+        }
+        
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 10px;
+            padding: 0 5px 0 5px;
+        }
+        
+        QGroupBox#actionsGroup, QGroupBox#statsGroup, QGroupBox#recentGroup, QGroupBox#settingsGroup {
+            background-color: #2d2d30;
+        }
+        
+        /* Buttons */
+        QPushButton#actionButton, QPushButton#toolbarButton {
+            background-color: #404040;
+            color: #ffffff;
+            border: 1px solid #555555;
+            padding: 8px 16px;
+            border-radius: 4px;
+            text-align: left;
+            margin: 2px;
+        }
+        
+        QPushButton#actionButton:hover, QPushButton#toolbarButton:hover {
+            background-color: #4a4a4a;
+            border-color: #666666;
+        }
+        
+        QPushButton#actionButton:pressed, QPushButton#toolbarButton:pressed {
+            background-color: #555555;
+        }
+        
+        /* Settings Labels */
+        QLabel#lastCheckLabel {
+            color: #cccccc;
+            font-size: 10px;
+            font-style: italic;
+            margin: 5px 0;
+        }
+        
+        QLabel#versionInfoLabel {
+            color: #007acc;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        QLabel#versionLabel {
+            color: #007acc;
+            font-size: 10px;
+            font-weight: bold;
+        }
+        
+        /* Update Buttons */
+        QPushButton#checkUpdateButton {
+            background-color: #007acc;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+            margin: 5px 0;
+        }
+        
+        QPushButton#checkUpdateButton:hover {
+            background-color: #1177bb;
+        }
+        
+        QPushButton#githubButton {
+            background-color: #6f42c1;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-size: 11px;
+            margin: 5px 0;
+        }
+        
+        QPushButton#githubButton:hover {
+            background-color: #8a63d2;
+        }
+        
+        /* Text Editor */
+        QTextEdit#textEditor {
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            border: 1px solid #3e3e42;
+            selection-background-color: #264f78;
+            font-family: 'Consolas', 'Courier New', monospace;
+        }
+        
+        /* Toolbar */
+        QFrame#editorToolbar {
+            background-color: #2d2d30;
+            border-bottom: 1px solid #3e3e42;
+        }
+        
+        /* Tab Widget */
+        QTabWidget#mainTabWidget {
+            background-color: #2b2b2b;
+        }
+        
+        QTabWidget#mainTabWidget::pane {
+            border: 1px solid #3e3e42;
+            background-color: #2b2b2b;
+        }
+        
+        QTabWidget#mainTabWidget::tab-bar {
+            left: 5px;
+        }
+        
+        QTabBar::tab {
+            background-color: #2d2d30;
+            color: #cccccc;
+            border: 1px solid #3e3e42;
+            padding: 8px 16px;
+            margin-right: 2px;
+        }
+        
+        QTabBar::tab:selected {
+            background-color: #007acc;
+            color: #ffffff;
+        }
+        
+        QTabBar::tab:hover {
+            background-color: #3e3e42;
+        }
+        
+        /* Lists */
+        QListWidget#recentList {
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            border: 1px solid #3e3e42;
+            alternate-background-color: #2a2a2a;
+        }
+        
+        QListWidget#recentList::item {
+            padding: 5px;
+            border-bottom: 1px solid #3e3e42;
+        }
+        
+        QListWidget#recentList::item:selected {
+            background-color: #007acc;
+        }
+        
+        QListWidget#recentList::item:hover {
+            background-color: #3e3e42;
+        }
+        
+        /* Labels */
+        QLabel#statsLabel {
+            color: #cccccc;
+            font-size: 11px;
+            margin: 10px;
+        }
+        
+        /* Combo Boxes */
+        QComboBox {
+            background-color: #404040;
+            color: #ffffff;
+            border: 1px solid #555555;
+            padding: 5px;
+            border-radius: 3px;
+        }
+        
+        QComboBox::drop-down {
+            border: none;
+        }
+        
+        QComboBox::down-arrow {
+            image: none;
+            border: none;
+        }
+        
+        /* Spin Boxes */
+        QSpinBox {
+            background-color: #404040;
+            color: #ffffff;
+            border: 1px solid #555555;
+            padding: 5px;
+            border-radius: 3px;
+        }
+        
+        /* Checkboxes */
+        QCheckBox {
+            color: #cccccc;
+            spacing: 8px;
+        }
+        
+        QCheckBox::indicator {
+            width: 16px;
+            height: 16px;
+        }
+        
+        QCheckBox::indicator:unchecked {
+            background-color: #404040;
+            border: 1px solid #555555;
+        }
+        
+        QCheckBox::indicator:checked {
+            background-color: #007acc;
+            border: 1px solid #007acc;
+        }
+        
+        /* Scroll Areas */
+        QScrollArea {
+            background-color: #2b2b2b;
+            border: none;
+        }
+        
+        /* Status Bar */
+        QStatusBar {
+            background-color: #252526;
+            color: #cccccc;
+            border-top: 1px solid #3e3e42;
+        }
+        
+        /* Menu Bar */
+        QMenuBar {
+                        background-color: #2d2d30;
+            color: #cccccc;
+            border-bottom: 1px solid #3e3e42;
+        }
+        
+        QMenuBar::item {
+            background-color: transparent;
+            padding: 4px 8px;
+        }
+        
+        QMenuBar::item:selected {
+            background-color: #007acc;
+            color: #ffffff;
+        }
+        
+        QMenu {
+            background-color: #2d2d30;
+            color: #cccccc;
+            border: 1px solid #3e3e42;
+        }
+        
+        QMenu::item {
+            padding: 6px 20px;
+        }
+        
+        QMenu::item:selected {
+            background-color: #007acc;
+            color: #ffffff;
+        }
+        
+        QMenu::separator {
+            height: 1px;
+            background-color: #3e3e42;
+            margin: 2px 0;
+        }
+        """
+        self.setStyleSheet(style)
+    
+    def apply_light_theme(self):
+        """Apply light theme styles"""
+        style = """
+        /* Main Application */
+        QMainWindow {
+            background-color: #ffffff;
+            color: #000000;
+        }
+        
+        /* Sidebar */
+        QFrame#sidebar {
+            background-color: #f5f5f5;
+            border-right: 1px solid #e0e0e0;
+        }
+        
+        QFrame#sidebarHeader {
+            background-color: #2196f3;
+            border: none;
+        }
+        
+        QLabel#appTitle {
+            color: white;
+            font-size: 16px;
+            font-weight: bold;
+            padding: 10px;
+        }
+        
+        /* Welcome Section */
+        QFrame#welcomeFrame {
+            background-color: #2196f3;
+            border-radius: 8px;
+            margin: 10px;
+        }
+        
+        QLabel#welcomeTitle {
+            color: white;
+            font-size: 20px;
+            font-weight: bold;
+            margin: 20px;
+        }
+        
+        QLabel#welcomeSubtitle {
+            color: #e3f2fd;
+            font-size: 12px;
+            margin: 10px;
+        }
+        
+        QLabel#sectionTitle {
+            color: #000000;
+            font-size: 16px;
+            font-weight: bold;
+            margin: 20px 10px 10px 10px;
+        }
+        
+        /* Feature Cards */
+        QFrame#featureCard {
+            background-color: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            margin: 5px;
+            padding: 10px;
+        }
+        
+        QLabel#featureTitle {
+            color: #1976d2;
+            font-size: 12px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        
+        QLabel#featureDescription {
+            color: #666666;
+            font-size: 10px;
+            margin-bottom: 10px;
+        }
+        
+        /* Groups */
+        QGroupBox {
+            color: #333333;
+            border: 1px solid #e0e0e0;
+            border-radius: 5px;
+            margin: 10px 5px;
+            padding-top: 10px;
+            font-weight: bold;
+        }
+        
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 10px;
+            padding: 0 5px 0 5px;
+        }
+        
+        QGroupBox#actionsGroup, QGroupBox#statsGroup, QGroupBox#recentGroup, QGroupBox#settingsGroup {
+            background-color: #fafafa;
+        }
+        
+        /* Buttons */
+        QPushButton#actionButton, QPushButton#toolbarButton {
+            background-color: #e3f2fd;
+            color: #1976d2;
+            border: 1px solid #bbdefb;
+            padding: 8px 16px;
+            border-radius: 4px;
+            text-align: left;
+            margin: 2px;
+        }
+        
+        QPushButton#actionButton:hover, QPushButton#toolbarButton:hover {
+            background-color: #bbdefb;
+            border-color: #90caf9;
+        }
+        
+        QPushButton#actionButton:pressed, QPushButton#toolbarButton:pressed {
+            background-color: #90caf9;
+        }
+        
+        /* Settings Labels */
+        QLabel#lastCheckLabel {
+            color: #666666;
+            font-size: 10px;
+            font-style: italic;
+            margin: 5px 0;
+        }
+        
+        QLabel#versionInfoLabel {
+            color: #2196f3;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        QLabel#versionLabel {
+            color: #2196f3;
+            font-size: 10px;
+            font-weight: bold;
+        }
+        
+        /* Update Buttons */
+        QPushButton#checkUpdateButton {
+            background-color: #2196f3;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+            margin: 5px 0;
+        }
+        
+        QPushButton#checkUpdateButton:hover {
+            background-color: #1976d2;
+        }
+        
+        QPushButton#githubButton {
+            background-color: #673ab7;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-size: 11px;
+            margin: 5px 0;
+        }
+        
+        QPushButton#githubButton:hover {
+            background-color: #5e35b1;
+        }
+        
+        /* Text Editor */
+        QTextEdit#textEditor {
+            background-color: #ffffff;
+            color: #000000;
+            border: 1px solid #e0e0e0;
+            selection-background-color: #bbdefb;
+            font-family: 'Consolas', 'Courier New', monospace;
+        }
+        
+        /* Toolbar */
+        QFrame#editorToolbar {
+            background-color: #f5f5f5;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        /* Tab Widget */
+        QTabWidget#mainTabWidget {
+            background-color: #ffffff;
+        }
+        
+        QTabWidget#mainTabWidget::pane {
+            border: 1px solid #e0e0e0;
+            background-color: #ffffff;
+        }
+        
+        QTabBar::tab {
+            background-color: #f5f5f5;
+            color: #333333;
+            border: 1px solid #e0e0e0;
+            padding: 8px 16px;
+            margin-right: 2px;
+        }
+        
+        QTabBar::tab:selected {
+            background-color: #2196f3;
+            color: #ffffff;
+        }
+        
+        QTabBar::tab:hover {
+            background-color: #e3f2fd;
+        }
+        
+        /* Lists */
+        QListWidget#recentList {
+            background-color: #ffffff;
+            color: #000000;
+            border: 1px solid #e0e0e0;
+            alternate-background-color: #f8f9fa;
+        }
+        
+        QListWidget#recentList::item {
+            padding: 5px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        QListWidget#recentList::item:selected {
+            background-color: #2196f3;
+            color: #ffffff;
+        }
+        
+        QListWidget#recentList::item:hover {
+            background-color: #e3f2fd;
+        }
+        
+        /* Labels */
+        QLabel#statsLabel {
+            color: #333333;
+            font-size: 11px;
+            margin: 10px;
+        }
+        
+        /* Combo Boxes */
+        QComboBox {
+            background-color: #ffffff;
+            color: #000000;
+            border: 1px solid #e0e0e0;
+            padding: 5px;
+            border-radius: 3px;
+        }
+        
+        /* Spin Boxes */
+        QSpinBox {
+            background-color: #ffffff;
+            color: #000000;
+            border: 1px solid #e0e0e0;
+            padding: 5px;
+            border-radius: 3px;
+        }
+        
+        /* Checkboxes */
+        QCheckBox {
+            color: #333333;
+            spacing: 8px;
+        }
+        
+        QCheckBox::indicator:unchecked {
+            background-color: #ffffff;
+            border: 1px solid #e0e0e0;
+        }
+        
+        QCheckBox::indicator:checked {
+            background-color: #2196f3;
+            border: 1px solid #2196f3;
+        }
+        
+        /* Status Bar */
+        QStatusBar {
+            background-color: #f5f5f5;
+            color: #333333;
+            border-top: 1px solid #e0e0e0;
+        }
+        
+        /* Menu Bar */
+        QMenuBar {
+            background-color: #ffffff;
+            color: #333333;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        QMenuBar::item:selected {
+            background-color: #2196f3;
+            color: #ffffff;
+        }
+        
+        QMenu {
+            background-color: #ffffff;
+            color: #333333;
+            border: 1px solid #e0e0e0;
+        }
+        
+        QMenu::item:selected {
+            background-color: #2196f3;
+            color: #ffffff;
+        }
+        """
+        self.setStyleSheet(style)
+    
+    def apply_blue_theme(self):
+        """Apply blue theme styles"""
+        style = """
+        /* Main Application */
+        QMainWindow {
+            background-color: #0d1b2a;
+            color: #ffffff;
+        }
+        
+        /* Sidebar */
+        QFrame#sidebar {
+            background-color: #1b263b;
+            border-right: 1px solid #415a77;
+        }
+        
+        QFrame#sidebarHeader {
+            background-color: #0077be;
+            border: none;
+        }
+        
+        QLabel#appTitle {
+            color: white;
+            font-size: 16px;
+            font-weight: bold;
+            padding: 10px;
+        }
+        
+        /* Welcome Section */
+        QFrame#welcomeFrame {
+            background-color: #0077be;
+            border-radius: 8px;
+            margin: 10px;
+        }
+        
+        QLabel#welcomeTitle {
+            color: white;
+            font-size: 20px;
+            font-weight: bold;
+            margin: 20px;
+        }
+        
+        QLabel#welcomeSubtitle {
+            color: #cce7f0;
+            font-size: 12px;
+            margin: 10px;
+        }
+        
+        QLabel#sectionTitle {
+            color: #ffffff;
+            font-size: 16px;
+            font-weight: bold;
+            margin: 20px 10px 10px 10px;
+        }
+        
+        /* Feature Cards */
+        QFrame#featureCard {
+            background-color: #415a77;
+            border: 1px solid #778da9;
+            border-radius: 8px;
+            margin: 5px;
+            padding: 10px;
+        }
+        
+        QLabel#featureTitle {
+            color: #00b4d8;
+            font-size: 12px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        
+        QLabel#featureDescription {
+            color: #e0e1dd;
+            font-size: 10px;
+            margin-bottom: 10px;
+        }
+        
+        /* Groups */
+        QGroupBox {
+            color: #e0e1dd;
+            border: 1px solid #415a77;
+            border-radius: 5px;
+            margin: 10px 5px;
+            padding-top: 10px;
+            font-weight: bold;
+        }
+        
+        QGroupBox#actionsGroup, QGroupBox#statsGroup, QGroupBox#recentGroup, QGroupBox#settingsGroup {
+            background-color: #1b263b;
+        }
+        
+        /* Buttons */
+        QPushButton#actionButton, QPushButton#toolbarButton {
+            background-color: #415a77;
+            color: #ffffff;
+            border: 1px solid #778da9;
+            padding: 8px 16px;
+            border-radius: 4px;
+            text-align: left;
+            margin: 2px;
+        }
+        
+        QPushButton#actionButton:hover, QPushButton#toolbarButton:hover {
+            background-color: #778da9;
+            border-color: #0077be;
+        }
+        
+        /* Update Buttons */
+        QPushButton#checkUpdateButton {
+            background-color: #0077be;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+            margin: 5px 0;
+        }
+        
+        QPushButton#checkUpdateButton:hover {
+            background-color: #005f99;
+        }
+        
+        QPushButton#githubButton {
+            background-color: #6a4c93;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-size: 11px;
+            margin: 5px 0;
+        }
+        
+        QPushButton#githubButton:hover {
+            background-color: #8b5a9e;
+        }
+        
+        /* Text Editor */
+        QTextEdit#textEditor {
+            background-color: #0d1b2a;
+            color: #e0e1dd;
+            border: 1px solid #415a77;
+            selection-background-color: #0077be;
+            font-family: 'Consolas', 'Courier New', monospace;
+        }
+        
+        /* Toolbar */
+        QFrame#editorToolbar {
+            background-color: #1b263b;
+            border-bottom: 1px solid #415a77;
+        }
+        
+        /* Tab Widget */
+        QTabWidget#mainTabWidget {
+            background-color: #0d1b2a;
+        }
+        
+        QTabBar::tab {
+            background-color: #1b263b;
+            color: #e0e1dd;
+            border: 1px solid #415a77;
+            padding: 8px 16px;
+                        margin-right: 2px;
+        }
+        
+        QTabBar::tab:selected {
+            background-color: #0077be;
+            color: #ffffff;
+        }
+        
+        QTabBar::tab:hover {
+            background-color: #415a77;
+        }
+        
+        /* Lists */
+        QListWidget#recentList {
+            background-color: #0d1b2a;
+            color: #e0e1dd;
+            border: 1px solid #415a77;
+            alternate-background-color: #1b263b;
+        }
+        
+        QListWidget#recentList::item {
+            padding: 5px;
+            border-bottom: 1px solid #415a77;
+        }
+        
+        QListWidget#recentList::item:selected {
+            background-color: #0077be;
+            color: #ffffff;
+        }
+        
+        QListWidget#recentList::item:hover {
+            background-color: #415a77;
+        }
+        
+        /* Labels */
+        QLabel#statsLabel {
+            color: #e0e1dd;
+            font-size: 11px;
+            margin: 10px;
+        }
+        
+        QLabel#lastCheckLabel {
+            color: #e0e1dd;
+            font-size: 10px;
+            font-style: italic;
+            margin: 5px 0;
+        }
+        
+        QLabel#versionInfoLabel {
+            color: #00b4d8;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        QLabel#versionLabel {
+            color: #00b4d8;
+            font-size: 10px;
+            font-weight: bold;
+        }
+        
+        /* Combo Boxes */
+        QComboBox {
+            background-color: #415a77;
+            color: #ffffff;
+            border: 1px solid #778da9;
+            padding: 5px;
+            border-radius: 3px;
+        }
+        
+        /* Spin Boxes */
+        QSpinBox {
+            background-color: #415a77;
+            color: #ffffff;
+            border: 1px solid #778da9;
+            padding: 5px;
+            border-radius: 3px;
+        }
+        
+        /* Checkboxes */
+        QCheckBox {
+            color: #e0e1dd;
+            spacing: 8px;
+        }
+        
+        QCheckBox::indicator:unchecked {
+            background-color: #415a77;
+            border: 1px solid #778da9;
+        }
+        
+        QCheckBox::indicator:checked {
+            background-color: #0077be;
+            border: 1px solid #0077be;
+        }
+        
+        /* Status Bar */
+        QStatusBar {
+            background-color: #1b263b;
+            color: #e0e1dd;
+            border-top: 1px solid #415a77;
+        }
+        
+        /* Menu Bar */
+        QMenuBar {
+            background-color: #1b263b;
+            color: #e0e1dd;
+            border-bottom: 1px solid #415a77;
+        }
+        
+        QMenuBar::item:selected {
+            background-color: #0077be;
+            color: #ffffff;
+        }
+        
+        QMenu {
+            background-color: #1b263b;
+            color: #e0e1dd;
+            border: 1px solid #415a77;
+        }
+        
+        QMenu::item:selected {
+            background-color: #0077be;
+            color: #ffffff;
+        }
+        """
+        self.setStyleSheet(style)
+    
+    def closeEvent(self, event):
+        """Handle application closing"""
         if self.unsaved_changes:
-            result = messagebox.askyesnocancel(
-                "Unsaved Changes",
-                "You have unsaved changes. Do you want to save before continuing?"
+            reply = QMessageBox.question(
+                self, 'Unsaved Changes',
+                'You have unsaved changes. Do you want to save before closing?',
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel
             )
             
-            if result is True:  # Yes - save
-                # This would be handled by the calling code
-                return True
-            elif result is False:  # No - don't save
-                return True
-            else:  # Cancel
-                return False
+            if reply == QMessageBox.Save:
+                self.save_file()
+                if self.unsaved_changes:  # Save was cancelled
+                    event.ignore()
+                    return
+            elif reply == QMessageBox.Cancel:
+                event.ignore()
+                return
         
-        return True
-    
-    def set_unsaved_changes(self, has_changes):
-        """Set unsaved changes flag"""
-        self.unsaved_changes = has_changes
-    
-    def get_file_info(self):
-        """Get information about current file"""
-        if not self.current_file:
-            return {
-                'name': 'Untitled',
-                'path': None,
-                'size': 0,
-                'modified': None,
-                'extension': None
-            }
+        # Save configuration before closing
+        self.save_config()
         
+        # Stop any running threads
+        if hasattr(self, 'update_thread') and self.update_thread.isRunning():
+            self.update_thread.quit()
+            self.update_thread.wait()
+        
+        event.accept()
+    
+    def restore_window_state(self):
+        """Restore window geometry and state"""
         try:
-            stat = os.stat(self.current_file)
-            return {
-                'name': os.path.basename(self.current_file),
-                'path': self.current_file,
-                'size': stat.st_size,
-                'modified': datetime.fromtimestamp(stat.st_mtime),
-                'extension': os.path.splitext(self.current_file)[1]
-            }
+            geometry = self.config.get('window_geometry', [100, 100, 1200, 800])
+            self.setGeometry(geometry[0], geometry[1], geometry[2], geometry[3])
         except:
-            return {
-                'name': os.path.basename(self.current_file),
-                'path': self.current_file,
-                'size': 0,
-                'modified': None,
-                'extension': os.path.splitext(self.current_file)[1]
-            }
+            # Fallback to center window
+            self.resize(1200, 800)
+            screen = QApplication.desktop().screenGeometry()
+            size = self.geometry()
+            self.move(
+                (screen.width() - size.width()) // 2,
+                (screen.height() - size.height()) // 2
+            )
 
-# Application constants and final setup
-LOG_FILE = "logs/app.log"
+class FindReplaceDialog(QDialog):
+    """Find and Replace dialog"""
+    def __init__(self, parent, text_editor):
+        super().__init__(parent)
+        self.text_editor = text_editor
+        self.setWindowTitle("Find & Replace")
+        self.setModal(True)
+        self.resize(400, 200)
+        self.setup_ui()
+        self.apply_styles()
+    
+    def setup_ui(self):
+        """Setup the find/replace dialog UI"""
+        layout = QVBoxLayout(self)
+        
+        # Find section
+        find_layout = QHBoxLayout()
+        find_layout.addWidget(QLabel("Find:"))
+        self.find_edit = QLineEdit()
+        find_layout.addWidget(self.find_edit)
+        layout.addLayout(find_layout)
+        
+        # Replace section
+        replace_layout = QHBoxLayout()
+        replace_layout.addWidget(QLabel("Replace:"))
+        self.replace_edit = QLineEdit()
+        replace_layout.addWidget(self.replace_edit)
+        layout.addLayout(replace_layout)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        find_btn = QPushButton("Find Next")
+        find_btn.clicked.connect(self.find_next)
+        button_layout.addWidget(find_btn)
+        
+        replace_btn = QPushButton("Replace")
+        replace_btn.clicked.connect(self.replace_current)
+        button_layout.addWidget(replace_btn)
+        
+        replace_all_btn = QPushButton("Replace All")
+        replace_all_btn.clicked.connect(self.replace_all)
+        button_layout.addWidget(replace_all_btn)
+        
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.close)
+        button_layout.addWidget(close_btn)
+        
+        layout.addLayout(button_layout)
+        
+        # Focus on find edit
+        self.find_edit.setFocus()
+    
+    def apply_styles(self):
+        """Apply styles to the dialog"""
+        style = """
+        QDialog {
+            background-color: #2b2b2b;
+            color: #ffffff;
+        }
+        
+        QLabel {
+            color: #ffffff;
+            margin: 5px;
+        }
+        
+        QLineEdit {
+            background-color: #404040;
+            color: #ffffff;
+            border: 1px solid #555555;
+            padding: 5px;
+            border-radius: 3px;
+            margin: 5px;
+        }
+        
+        QPushButton {
+            background-color: #007acc;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            margin: 5px;
+        }
+        
+        QPushButton:hover {
+            background-color: #1177bb;
+        }
+        """
+        self.setStyleSheet(style)
+    
+    def find_next(self):
+        """Find next occurrence"""
+        text = self.find_edit.text()
+        if text:
+            found = self.text_editor.find(text)
+            if not found:
+                QMessageBox.information(self, "Find", "Text not found")
+    
+    def replace_current(self):
+        """Replace current selection"""
+        if self.text_editor.textCursor().hasSelection():
+            cursor = self.text_editor.textCursor()
+            cursor.insertText(self.replace_edit.text())
+    
+    def replace_all(self):
+        """Replace all occurrences"""
+        find_text = self.find_edit.text()
+        replace_text = self.replace_edit.text()
+        
+        if find_text:
+            content = self.text_editor.toPlainText()
+            new_content = content.replace(find_text, replace_text)
+            self.text_editor.setPlainText(new_content)
+            
+            count = content.count(find_text)
+            QMessageBox.information(self, "Replace All", f"Replaced {count} occurrences")
 
-# Initialize logger as None (will be set up in setup_logging)
-logger = None
+def setup_logging():
+    """Setup application logging"""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler('app.log'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+
+def main():
+    """Main application entry point"""
+    # Setup logging
+    setup_logging()
+    logger = logging.getLogger(__name__)
+    
+    try:
+        # Create QApplication
+        app = QApplication(sys.argv)
+        
+        # Set application properties
+        app.setApplicationName(APP_NAME)
+        app.setApplicationVersion(CURRENT_VERSION)
+        app.setOrganizationName("PixelHeaven")
+        app.setOrganizationDomain("pixelheaven.io")
+        
+        # Set application icon if available
+        try:
+            if os.path.exists("icon.ico"):
+                app.setWindowIcon(QIcon("icon.ico"))
+        except Exception as e:
+            logger.warning(f"Could not load application icon: {e}")
+        
+        # Create and show main window
+        logger.info(f"Starting {APP_NAME} v{CURRENT_VERSION}")
+        window = ModernApp()
+        window.restore_window_state()
+        window.show()
+        
+        # Apply initial theme
+        window.apply_styles()
+        
+        # Start event loop
+        sys.exit(app.exec_())
+        
+    except Exception as e:
+        logger.error(f"Failed to start application: {e}")
+        
+        # Show error dialog if possible
+        try:
+            error_app = QApplication(sys.argv)
+            QMessageBox.critical(
+                None,
+                "Application Error",
+                f"An error occurred while starting the application:\n\n{str(e)}\n\n"
+                f"Please check that all dependencies are installed:\n"
+                f"pip install PyQt5\n"
+                f"pip install requests"
+            )
+        except:
+            print(f"Critical error: {e}")
+        
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
