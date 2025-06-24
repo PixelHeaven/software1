@@ -9,7 +9,7 @@ import threading
 from pathlib import Path
 
 CURRENT_VERSION = "1.1.0"
-VERSION_URL = "https://raw.githubusercontent.com/yourusername/yourapp/main/version.json"
+VERSION_URL = "https://raw.githubusercontent.com/PixelHeaven/software1/main/version.json"
 APP_NAME = "MyApp"
 
 class MainApp:
