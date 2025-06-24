@@ -1,6 +1,25 @@
 {
-  "version": "1.0.2",
+  "version": "1.0.3",
   "installer_url": "https://github.com/PixelHeaven/software1/releases/download/v1.0.2/MyApp_Setup.exe",
-  "release_notes": "🎉 Major Update!\n\n✨ New Features:\n• Beautiful tabbed interface\n• Built-in text editor with auto-save\n• Customizable settings\n• Enhanced update system\n• Professional design\n\n🐛 Bug Fixes:\n• Improved error handling\n• Better user feedback\n• Optimized performance\n\n🔧 Improvements:\n• Modern UI/UX\n• Keyboard shortcuts\n• Configuration management",
+  "release_notes": "🛠️ Bug Fixes & Improvements
+Critical Fixes
+✅ Fixed missing safe_import_requests() function - App no longer crashes on startup
+✅ Fixed ReportLab import handling - PDF export now works properly with graceful fallbacks
+✅ Fixed PyMuPDF import handling - PDF viewer loads correctly with proper error handling
+✅ Fixed incomplete code sections - Resolved syntax errors and missing method implementations
+Enhanced Error Handling
+🛡️ Improved dependency management - App runs smoothly even without optional libraries
+🛡️ Added graceful fallbacks - Features disable cleanly when dependencies are missing
+🛡️ Better error messages - Users get helpful guidance when features aren't available
+🛡️ Crash prevention - Robust error handling prevents unexpected shutdowns
+Stability Improvements
+🔧 Fixed text editor callbacks - Text change events now handled properly
+🔧 Improved theme switching - More reliable theme application
+🔧 Enhanced auto-save functionality - Better file handling and backup creation
+🔧 Optimized update checking - More reliable version comparison and download handling
+User Experience
+💡 Clear dependency messages - Users know exactly what to install for full functionality
+💡 Improved startup reliability - App starts consistently across different environments
+💡 Better feature availability indicators - Clear feedback when optional features are unavailable",
   "min_version": "1.0.0"
 }
