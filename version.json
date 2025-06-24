@@ -1,6 +1,6 @@
 {
   "version": "1.1.0",
-  "installer_url": "https://github.com/yourusername/yourapp/releases/download/v1.1.0/MyApp_Setup.exe",
+  "installer_url": "https://github.com/PixelHeaven/software1/releases/download/v1.1.0/MyApp_Setup.exe",
   "release_notes": "Bug fixes and improvements",
   "min_version": "1.0.0"
 }
