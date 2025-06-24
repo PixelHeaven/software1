@@ -597,7 +597,7 @@ A modern Python application with:
 • Professional design
 
 Built with Python & Tkinter
-© 2024 Your Name"""
+© 2025 PixelHeaven"""
         
         messagebox.showinfo("About", about_text)
     
